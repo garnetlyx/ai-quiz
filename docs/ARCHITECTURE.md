@@ -45,10 +45,12 @@ ai-quiz/
 │       │   ├── services/         # Business logic
 │       │   │   ├── ai.ts         # AI client + prompt orchestration
 │       │   │   ├── search.ts     # SearXNG primary + Brave fallback
+│       │   │   ├── scope.ts      # Scope normalization, merge, freeze logic
 │       │   │   └── quiz.ts       # Quiz generation + dedup logic
 │       │   ├── prompts/          # Versioned AI prompt templates
 │       │   │   ├── topic-interpret.ts
 │       │   │   ├── format-detect.ts
+│       │   │   ├── scope-generate.ts
 │       │   │   └── question-generate.ts
 │       │   ├── db/
 │       │   │   ├── schema.ts     # Drizzle schema
@@ -68,7 +70,9 @@ ai-quiz/
 │   ├── TASKS.md
 │   └── SESSION_LOG.md
 │
-├── docker-compose.yml            # PostgreSQL for local dev
+├── searxng/
+│   └── settings.yml              # SearXNG configuration for local search
+├── docker-compose.yml            # PostgreSQL + SearXNG for local dev
 ├── package.json                  # Workspace root
 └── tsconfig.base.json
 ```
@@ -84,9 +88,23 @@ User input (free text)
   → AI: Detect exam format (choices count, single/multi)
   → Present format for user confirmation
   → If rejected: user provides feedback → AI refines (+ web search) → re-confirm
-  → AI proposes editable chapter/subtopic scope
+  → AI proposes editable chapter/subtopic scope (scope-generate.ts prompt)
   → User can edit description, scope, examples, notes, and additional topics
+  → scope.ts: normalizeScope + normalizeMaterials on save
   → Save topic with confirmed format and scope
+```
+
+### 5. Scope Edit Flow
+
+```
+User edits scope on topic detail screen (TopicEditor component)
+  → PATCH /api/topics/:id with updated scope + materials
+  → scope.ts: normalizeScope sanitizes structure
+  → scope.ts: mergeScopeWithUsage compares with existing question pool:
+      - Items with generated questions → frozen (excluded from future generation but preserved)
+      - Items without questions → dropped from DB
+      - New items → added as active
+  → Updated scope persisted; question generation uses activeScopeItems only
 ```
 
 ### 2. Question Generation Pipeline
