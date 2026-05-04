@@ -1,23 +1,20 @@
-import { Stack, useRouter } from "expo-router";
-import { useEffect } from "react";
+import { Redirect, Stack } from "expo-router";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/auth";
 
 export default function AppLayout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const hydrate = useAuthStore((s) => s.hydrate);
-  const router = useRouter();
+  const [hasHydrated, setHasHydrated] = useState(false);
 
   useEffect(() => {
     hydrate();
+    setHasHydrated(true);
   }, [hydrate]);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      router.replace("/(auth)/login");
-    }
-  }, [isAuthenticated, router]);
+  if (!hasHydrated) return <Stack screenOptions={{ headerShown: false }} />;
 
-  if (!isAuthenticated) return null;
+  if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
 
   return (
     <Stack
