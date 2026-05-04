@@ -5,7 +5,9 @@ import {
   getQuizHistory,
 } from "../services/quiz.js";
 import { db } from "../db/index.js";
-import { questions, quizSessions } from "../db/schema.js";
+import { questions, quizSessions, topics } from "../db/schema.js";
+import { and, eq } from "drizzle-orm";
+import type { ExamFormat } from "@ai-quiz/shared";
 
 export async function historyRoutes(app: FastifyInstance) {
   app.addHook("preHandler", async (request) => {
@@ -64,6 +66,14 @@ export async function historyRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { topicId } = request.params as { topicId: string };
       const userId = (request.user as { userId: string }).userId;
+      const [topic] = await db
+        .select()
+        .from(topics)
+        .where(and(eq(topics.id, topicId), eq(topics.userId, userId)))
+        .limit(1);
+
+      if (!topic) return reply.status(404).send({ message: "Topic not found" });
+      const format = topic.examFormat as ExamFormat | null;
 
       const missed = await getMissedQuestions(topicId, userId);
       if (missed.length === 0) {
@@ -91,6 +101,7 @@ export async function historyRoutes(app: FastifyInstance) {
             correctAnswers: q.correctAnswers,
             explanations: q.explanations,
             subtopicTags: q.subtopicTags,
+            scopeItemId: q.scopeItemId,
             contentHash: q.contentHash,
           }))
         )
@@ -110,6 +121,8 @@ export async function historyRoutes(app: FastifyInstance) {
           content: q.content,
           options: q.options,
           subtopicTags: q.subtopicTags,
+          scopeItemId: q.scopeItemId,
+          isMultiSelect: format?.isMultiSelect ?? false,
           isFlagged: q.isFlagged,
         })),
       });

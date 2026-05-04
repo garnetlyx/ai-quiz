@@ -36,6 +36,12 @@ export const topics = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description").notNull(),
+    scope: jsonb("scope").notNull().default({ chapters: [] }),
+    materials: jsonb("materials").notNull().default({
+      examples: "",
+      additionalTopics: "",
+      notes: "",
+    }),
     examFormat: jsonb("exam_format"),
     status: text("status", {
       enum: ["draft", "confirmed"],
@@ -101,6 +107,7 @@ export const questions = pgTable(
     correctAnswers: integer("correct_answers").array().notNull(),
     explanations: jsonb("explanations").notNull(),
     subtopicTags: text("subtopic_tags").array().notNull().default([]),
+    scopeItemId: text("scope_item_id"),
     userAnswers: integer("user_answers").array(),
     isCorrect: boolean("is_correct"),
     isFlagged: boolean("is_flagged").notNull().default(false),

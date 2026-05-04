@@ -5,6 +5,8 @@ import {
   FlatList,
   Pressable,
   ActivityIndicator,
+  Modal,
+  TextInput,
   StyleSheet,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -17,6 +19,8 @@ export default function ResultsScreen() {
   const [session, setSession] = useState<QuizSession | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [flaggingQuestionId, setFlaggingQuestionId] = useState<string | null>(null);
+  const [flagReason, setFlagReason] = useState("");
 
   useEffect(() => {
     if (!sessionId) return;
@@ -29,6 +33,23 @@ export default function ResultsScreen() {
       })
       .finally(() => setIsLoading(false));
   }, [sessionId]);
+
+  const handleFlag = async () => {
+    if (!sessionId || !flaggingQuestionId) return;
+    await api.request(`/api/quiz/${sessionId}/questions/${flaggingQuestionId}/flag`, {
+      method: "POST",
+      body: { reason: flagReason || "Question or answer accuracy disputed from review" },
+    });
+    setQuestions((current) =>
+      current.map((question) =>
+        question.id === flaggingQuestionId
+          ? { ...question, isFlagged: true, flagReason: flagReason || "Question or answer accuracy disputed from review" }
+          : question
+      )
+    );
+    setFlaggingQuestionId(null);
+    setFlagReason("");
+  };
 
   if (isLoading) {
     return (
@@ -82,9 +103,17 @@ export default function ResultsScreen() {
           >
             <View style={styles.questionHeader}>
               <Text style={styles.questionNumber}>Q{index + 1}</Text>
-              <Text style={[styles.resultBadge, item.isCorrect ? styles.badgeCorrect : styles.badgeWrong]}>
-                {item.isCorrect ? "Correct" : "Incorrect"}
-              </Text>
+              <View style={styles.headerActions}>
+                <Text style={[styles.resultBadge, item.isCorrect ? styles.badgeCorrect : styles.badgeWrong]}>
+                  {item.isCorrect ? "Correct" : "Incorrect"}
+                </Text>
+                <Pressable
+                  style={[styles.flagButton, item.isFlagged && styles.flaggedButton]}
+                  onPress={() => setFlaggingQuestionId(item.id)}
+                >
+                  <Text style={styles.flagButtonText}>{item.isFlagged ? "Flagged" : "Flag"}</Text>
+                </Pressable>
+              </View>
             </View>
 
             <Text style={styles.questionText}>{item.content}</Text>
@@ -129,6 +158,30 @@ export default function ResultsScreen() {
           </View>
         )}
       />
+
+      <Modal visible={Boolean(flaggingQuestionId)} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Flag Question</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={flagReason}
+              onChangeText={setFlagReason}
+              placeholder="What looks wrong about the answer or explanation?"
+              multiline
+              placeholderTextColor="#999"
+            />
+            <View style={styles.modalButtons}>
+              <Pressable onPress={() => setFlaggingQuestionId(null)} style={styles.modalCancel}>
+                <Text>Cancel</Text>
+              </Pressable>
+              <Pressable onPress={handleFlag} style={styles.modalSubmit}>
+                <Text style={styles.modalSubmitText}>Flag</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -146,10 +199,14 @@ const styles = StyleSheet.create({
   questionCard: { backgroundColor: "#fff", padding: 16, borderRadius: 8, marginBottom: 12 },
   questionCardMissed: { borderLeftWidth: 4, borderLeftColor: "#dc2626" },
   questionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   questionNumber: { fontSize: 14, fontWeight: "600", color: "#666" },
   resultBadge: { fontSize: 12, fontWeight: "600", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
   badgeCorrect: { backgroundColor: "#dcfce7", color: "#16a34a" },
   badgeWrong: { backgroundColor: "#fef2f2", color: "#dc2626" },
+  flagButton: { borderWidth: 1, borderColor: "#f59e0b", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  flaggedButton: { backgroundColor: "#fffbeb" },
+  flagButtonText: { color: "#b45309", fontSize: 12, fontWeight: "600" },
   questionText: { fontSize: 16, fontWeight: "500", marginBottom: 12, lineHeight: 24 },
   optionRow: { padding: 10, borderRadius: 6, marginBottom: 6, backgroundColor: "#f9fafb" },
   optionCorrect: { backgroundColor: "#dcfce7", borderLeftWidth: 3, borderLeftColor: "#16a34a" },
@@ -159,4 +216,12 @@ const styles = StyleSheet.create({
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   tag: { backgroundColor: "#eff6ff", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
   tagText: { fontSize: 12, color: "#2563eb" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 16 },
+  modalContent: { backgroundColor: "#fff", padding: 24, borderRadius: 12 },
+  modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
+  modalInput: { borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 12, minHeight: 80, marginBottom: 16, textAlignVertical: "top" },
+  modalButtons: { flexDirection: "row", justifyContent: "flex-end", gap: 12 },
+  modalCancel: { padding: 10 },
+  modalSubmit: { backgroundColor: "#f59e0b", padding: 10, borderRadius: 6 },
+  modalSubmitText: { color: "#fff", fontWeight: "600" },
 });

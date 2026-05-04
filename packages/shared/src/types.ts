@@ -33,11 +33,36 @@ export interface ExamFormat {
   isMultiSelect: boolean;
 }
 
+export interface TopicScopeItem {
+  id: string;
+  title: string;
+  details: string;
+  frozen: boolean;
+}
+
+export interface TopicScopeChapter {
+  id: string;
+  title: string;
+  items: TopicScopeItem[];
+}
+
+export interface TopicMaterials {
+  examples: string;
+  additionalTopics: string;
+  notes: string;
+}
+
+export interface TopicScope {
+  chapters: TopicScopeChapter[];
+}
+
 export interface Topic {
   id: string;
   userId: string;
   title: string;
   description: string;
+  scope: TopicScope;
+  materials: TopicMaterials;
   examFormat: ExamFormat | null;
   status: "draft" | "confirmed";
   createdAt: string;
@@ -63,6 +88,12 @@ export interface FormatConfirmRequest {
 export interface FormatConfirmResponse {
   topic: Topic;
   examFormat: ExamFormat;
+}
+
+export interface TopicUpdateRequest {
+  description: string;
+  scope: TopicScope;
+  materials: TopicMaterials;
 }
 
 // Quiz Types
@@ -122,6 +153,8 @@ export interface QuizQuestion {
   content: string;
   options: QuestionOption[];
   subtopicTags: string[];
+  scopeItemId: string | null;
+  isMultiSelect: boolean;
   isFlagged: boolean;
 }
 

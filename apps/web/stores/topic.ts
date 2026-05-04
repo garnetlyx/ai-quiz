@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "../services/api";
-import type { Topic, TopicCreateResponse } from "@ai-quiz/shared";
+import type { Topic, TopicCreateResponse, TopicUpdateRequest } from "@ai-quiz/shared";
 
 interface TopicState {
   topics: Topic[];
@@ -14,6 +14,7 @@ interface TopicState {
     confirmed: boolean,
     feedback?: string
   ) => Promise<void>;
+  updateTopic: (id: string, update: TopicUpdateRequest) => Promise<Topic>;
 }
 
 export const useTopicStore = create<TopicState>((set) => ({
@@ -49,5 +50,17 @@ export const useTopicStore = create<TopicState>((set) => ({
       const topic = await api.request<Topic>(`/api/topics/${id}`);
       set({ currentTopic: topic });
     }
+  },
+
+  updateTopic: async (id, update) => {
+    const topic = await api.request<Topic>(`/api/topics/${id}`, {
+      method: "PATCH",
+      body: update,
+    });
+    set((state) => ({
+      currentTopic: topic,
+      topics: state.topics.map((item) => (item.id === id ? topic : item)),
+    }));
+    return topic;
   },
 }));

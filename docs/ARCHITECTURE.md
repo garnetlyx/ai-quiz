@@ -12,7 +12,7 @@ Monorepo with two apps (web frontend + API backend) and a shared package for typ
 | Backend | Node.js + Fastify | Fast, schema-based validation, TypeScript-native |
 | Database | PostgreSQL + Drizzle ORM | Relational model fits domain; Drizzle is type-safe and lightweight |
 | AI | OpenAI-compatible SDK | Configurable endpoint supports local models, OpenAI, Claude proxies |
-| Search | Brave Search API | Optional fact-checking for generated questions |
+| Search | SearXNG + Brave Search API fallback | Local-first optional fact-checking for generated questions |
 | Auth | bcrypt + JWT | Simple, stateless auth for MVP |
 | Monorepo | npm workspaces | Lightweight, no extra tooling |
 
@@ -44,7 +44,7 @@ ai-quiz/
 │       │   │   └── history.ts
 │       │   ├── services/         # Business logic
 │       │   │   ├── ai.ts         # AI client + prompt orchestration
-│       │   │   ├── search.ts     # Brave Search integration
+│       │   │   ├── search.ts     # SearXNG primary + Brave fallback
 │       │   │   └── quiz.ts       # Quiz generation + dedup logic
 │       │   ├── prompts/          # Versioned AI prompt templates
 │       │   │   ├── topic-interpret.ts
@@ -84,16 +84,19 @@ User input (free text)
   → AI: Detect exam format (choices count, single/multi)
   → Present format for user confirmation
   → If rejected: user provides feedback → AI refines (+ web search) → re-confirm
-  → Save topic with confirmed format
+  → AI proposes editable chapter/subtopic scope
+  → User can edit description, scope, examples, notes, and additional topics
+  → Save topic with confirmed format and scope
 ```
 
 ### 2. Question Generation Pipeline
 
 ```
-Topic + format + existing question hashes
+Topic + format + active scope + supplemental materials + existing hashes
   → AI: Generate N questions with subtopic tags + explanations
+  → Assign questions across active scope items to avoid uneven coverage
   → Deduplicate against question pool (content_hash)
-  → Optional: Brave Search verification per question
+  → Optional: SearXNG verification per question, Brave fallback
   → Store questions with content_hash
   → Return to client
 ```
@@ -128,6 +131,7 @@ On quiz completion:
 - `POST /api/topics/:id/confirm-format` — Confirm or reject detected format
 - `GET /api/topics` — List user's topics
 - `GET /api/topics/:id` — Topic detail with stats
+- `PATCH /api/topics/:id` — Edit description, scope, examples, notes, and additional topics
 
 ### Quiz
 - `POST /api/topics/:id/quiz` — Start quiz (generates questions)
@@ -146,7 +150,7 @@ On quiz completion:
 ┌─────────┐     REST      ┌─────────┐     OAI API    ┌──────────┐
 │  Expo   │ ◄──────────► │ Fastify │ ◄────────────► │ AI Model │
 │  Web    │               │   API   │                 └──────────┘
-└─────────┘               │         │     Brave API   ┌──────────┐
+└─────────┘               │         │ SearXNG/Brave   ┌──────────┐
                           │         │ ◄────────────► │  Search  │
                           │         │                 └──────────┘
                           │         │                 ┌──────────┐
@@ -165,3 +169,4 @@ On quiz completion:
 | Content dedup | SHA-256 hash of normalized question text | Fast lookup, handles minor variations |
 | Question pool | Per-topic in DB | Scales with usage, queryable |
 | Timer | Client-side countdown | No server enforcement needed for practice |
+| Scope edits | Freeze removed used subtopics | Preserves historical quizzes while excluding removed scope from future generation |

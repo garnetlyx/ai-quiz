@@ -21,13 +21,17 @@ class ApiClient {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
+    const requestHeaders: Record<string, string> = {
+      ...headers,
+    };
+    if (body !== undefined) {
+      requestHeaders["Content-Type"] = "application/json";
+    }
+
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
-      headers: {
-        "Content-Type": "application/json",
-        ...headers,
-      },
-      body: body ? JSON.stringify(body) : undefined,
+      headers: requestHeaders,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 
     if (res.status === 401) {

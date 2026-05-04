@@ -4,10 +4,45 @@ import { questions, quizSessions, topics } from "../db/schema.js";
 import { eq, and, desc, count } from "drizzle-orm";
 import { generateQuestions } from "./ai.js";
 import { factCheckQuestion } from "./search.js";
+import {
+  activeScopeItems,
+  buildScopeContext,
+  normalizeMaterials,
+  normalizeScope,
+  scopeItemExists,
+} from "./scope.js";
+import type { ExamFormat, TopicScopeItem } from "@ai-quiz/shared";
 
 function computeContentHash(text: string): string {
   const normalized = text.toLowerCase().trim().replace(/[^\w\s]/g, "");
   return createHash("sha256").update(normalized).digest("hex");
+}
+
+export function buildScopePlan(
+  items: TopicScopeItem[],
+  questionCount: number,
+  subtopicFilter?: string[]
+) {
+  const normalizedFilter = new Set(
+    (subtopicFilter || []).map((item) => item.toLowerCase())
+  );
+  const eligible = normalizedFilter.size > 0
+    ? items.filter((item) =>
+        normalizedFilter.has(item.id.toLowerCase()) ||
+        normalizedFilter.has(item.title.toLowerCase())
+      )
+    : items;
+  const pool = eligible.length > 0 ? eligible : items;
+  const counts = new Map<string, { id: string; title: string; count: number }>();
+
+  for (let i = 0; i < questionCount; i++) {
+    const item = pool[i % pool.length];
+    const current = counts.get(item.id) || { id: item.id, title: item.title, count: 0 };
+    current.count++;
+    counts.set(item.id, current);
+  }
+
+  return Array.from(counts.values());
 }
 
 export async function generateQuizForTopic(
@@ -29,6 +64,16 @@ export async function generateQuizForTopic(
 
   if (!topic) throw new Error("Topic not found");
   if (!topic.examFormat) throw new Error("Topic format not confirmed");
+  const format = topic.examFormat as ExamFormat;
+  const scope = normalizeScope(topic.scope);
+  const materials = normalizeMaterials(topic.materials);
+  const activeItems = activeScopeItems(scope);
+  if (activeItems.length === 0) throw new Error("Topic has no active scope items");
+  const scopePlan = buildScopePlan(
+    activeItems,
+    questionCount,
+    options?.subtopicFilter
+  );
 
   const existingHashes = await db
     .select({ contentHash: questions.contentHash })
@@ -37,10 +82,12 @@ export async function generateQuizForTopic(
 
   const generated = await generateQuestions({
     topic: topic.description,
-    format: topic.examFormat as { choicesCount: number; isMultiSelect: boolean },
+    format,
     count: questionCount,
     existingHashes: existingHashes.map((h) => h.contentHash),
     subtopicFilter: options?.subtopicFilter,
+    scopeContext: buildScopeContext(scope, materials),
+    scopePlan,
   });
 
   for (const q of generated) {
@@ -67,10 +114,13 @@ export async function generateQuizForTopic(
         topicId,
         content: q.content,
         options: q.options,
-        correctAnswers: q.correctAnswers,
-        explanations: q.explanations,
-        subtopicTags: q.subtopicTags,
-        contentHash: computeContentHash(q.content),
+      correctAnswers: q.correctAnswers,
+      explanations: q.explanations,
+      subtopicTags: q.subtopicTags,
+      scopeItemId: q.scopeItemId && scopeItemExists(scope, q.scopeItemId)
+        ? q.scopeItemId
+        : scopePlan[0]?.id ?? null,
+      contentHash: computeContentHash(q.content),
       }))
     )
     .returning();
@@ -90,6 +140,8 @@ export async function generateQuizForTopic(
       content: q.content,
       options: q.options,
       subtopicTags: q.subtopicTags,
+      scopeItemId: q.scopeItemId,
+      isMultiSelect: format.isMultiSelect,
       isFlagged: q.isFlagged,
     })),
   };
@@ -114,11 +166,18 @@ export async function submitQuizAnswers(
     .select()
     .from(questions)
     .where(eq(questions.sessionId, sessionId));
+  const format = session.topics.examFormat as ExamFormat | null;
 
   let correctCount = 0;
 
   for (const question of questionRows) {
-    const userAnswer = answers[question.id] || [];
+    const submittedAnswer = answers[question.id] || [];
+    if (format && !format.isMultiSelect && submittedAnswer.length > 1) {
+      throw new Error("Single-select questions accept one answer");
+    }
+    const userAnswer = format && !format.isMultiSelect
+      ? submittedAnswer.slice(0, 1)
+      : submittedAnswer;
     const isCorrect =
       userAnswer.length === question.correctAnswers.length &&
       userAnswer.every((a) => question.correctAnswers.includes(a)) &&
@@ -190,8 +249,9 @@ export async function getMissedQuestions(topicId: string, userId: string) {
     .limit(1);
 
   if (!topic) throw new Error("Topic not found");
+  const activeItemIds = new Set(activeScopeItems(normalizeScope(topic.scope)).map((item) => item.id));
 
-  return db
+  const missed = await db
     .select()
     .from(questions)
     .where(
@@ -201,6 +261,9 @@ export async function getMissedQuestions(topicId: string, userId: string) {
         eq(questions.isFlagged, false)
       )
     );
+  return missed.filter((question) =>
+    !question.scopeItemId || activeItemIds.has(question.scopeItemId)
+  );
 }
 
 export async function getWeakSubtopics(topicId: string, userId: string) {
@@ -211,11 +274,13 @@ export async function getWeakSubtopics(topicId: string, userId: string) {
     .limit(1);
 
   if (!topic) throw new Error("Topic not found");
+  const activeItemIds = new Set(activeScopeItems(normalizeScope(topic.scope)).map((item) => item.id));
 
   const missed = await db
     .select({
       subtopicTags: questions.subtopicTags,
       topicId: questions.topicId,
+      scopeItemId: questions.scopeItemId,
     })
     .from(questions)
     .where(
@@ -225,18 +290,24 @@ export async function getWeakSubtopics(topicId: string, userId: string) {
         eq(questions.isFlagged, false)
       )
     );
+  const activeMissed = missed.filter((question) =>
+    !question.scopeItemId || activeItemIds.has(question.scopeItemId)
+  );
 
   const allQuestions = await db
-    .select({ subtopicTags: questions.subtopicTags })
+    .select({ subtopicTags: questions.subtopicTags, scopeItemId: questions.scopeItemId })
     .from(questions)
     .where(eq(questions.topicId, topicId));
+  const activeQuestions = allQuestions.filter((question) =>
+    !question.scopeItemId || activeItemIds.has(question.scopeItemId)
+  );
 
   const subtopicStats = new Map<
     string,
     { missCount: number; totalCount: number }
   >();
 
-  for (const q of missed) {
+  for (const q of activeMissed) {
     for (const tag of q.subtopicTags || []) {
       const stat = subtopicStats.get(tag) || { missCount: 0, totalCount: 0 };
       stat.missCount++;
@@ -244,7 +315,7 @@ export async function getWeakSubtopics(topicId: string, userId: string) {
     }
   }
 
-  for (const q of allQuestions) {
+  for (const q of activeQuestions) {
     for (const tag of q.subtopicTags || []) {
       const stat = subtopicStats.get(tag) || { missCount: 0, totalCount: 0 };
       stat.totalCount++;

@@ -88,13 +88,18 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     if (!question) return;
 
     const current = answers[questionId] || [];
+    const nextAnswer = question.isMultiSelect
+      ? current.includes(answerIndex)
+        ? current.filter((i) => i !== answerIndex)
+        : [...current, answerIndex]
+      : current.includes(answerIndex)
+        ? []
+        : [answerIndex];
 
     set({
       answers: {
         ...answers,
-        [questionId]: current.includes(answerIndex)
-          ? current.filter((i) => i !== answerIndex)
-          : [...current, answerIndex],
+        [questionId]: nextAnswer,
       },
     });
   },

@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { buildTopicInterpretMessages } from "../prompts/topic-interpret.js";
 import { buildFormatDetectMessages } from "../prompts/format-detect.js";
 import { buildQuestionGenerateMessages } from "../prompts/question-generate.js";
+import { buildScopeGenerateMessages } from "../prompts/scope-generate.js";
 
 let _client: OpenAI | null = null;
 
@@ -37,6 +38,7 @@ interface GeneratedQuestion {
   correctAnswers: number[];
   explanations: { optionId: string; isCorrect: boolean; explanation: string }[];
   subtopicTags: string[];
+  scopeItemId?: string | null;
 }
 
 function getModel(): string {
@@ -100,12 +102,30 @@ export async function detectFormat(
   return parseJsonObject(getMessageContent(response)) as ExamFormatResult;
 }
 
+export async function generateScope(topicDescription: string): Promise<{
+  chapters: { title: string; items: { title: string; details?: string }[] }[];
+}> {
+  const messages = buildScopeGenerateMessages(topicDescription);
+  const response = await getClient().chat.completions.create({
+    model: getModel(),
+    messages,
+    response_format: { type: "json_object" },
+    temperature: 0.3,
+  });
+
+  return parseJsonObject(getMessageContent(response)) as {
+    chapters: { title: string; items: { title: string; details?: string }[] }[];
+  };
+}
+
 export async function generateQuestions(params: {
   topic: string;
   format: { choicesCount: number; isMultiSelect: boolean };
   count: number;
   existingHashes: string[];
   subtopicFilter?: string[];
+  scopeContext?: string;
+  scopePlan?: { id: string; title: string; count: number }[];
 }): Promise<GeneratedQuestion[]> {
   const messages = buildQuestionGenerateMessages(params);
   const response = await getClient().chat.completions.create({

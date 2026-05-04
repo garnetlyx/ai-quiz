@@ -11,14 +11,16 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useTopicStore } from "@/stores/topic";
 import { api } from "@/services/api";
 import type { QuizHistoryEntry, WeakSubtopic } from "@ai-quiz/shared";
+import { TopicEditor } from "@/components/TopicEditor";
 
 export default function TopicDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const currentTopic = useTopicStore((s) => s.currentTopic);
   const fetchTopic = useTopicStore((s) => s.fetchTopic);
+  const updateTopic = useTopicStore((s) => s.updateTopic);
   const isLoading = useTopicStore((s) => s.isLoading);
-  const [activeTab, setActiveTab] = useState<"quiz" | "history" | "missed" | "subtopics">("quiz");
+  const [activeTab, setActiveTab] = useState<"quiz" | "scope" | "history" | "missed" | "subtopics">("quiz");
   const [history, setHistory] = useState<QuizHistoryEntry[]>([]);
   const [weakSubtopics, setWeakSubtopics] = useState<WeakSubtopic[]>([]);
   const [selectedSubtopics, setSelectedSubtopics] = useState<Set<string>>(new Set());
@@ -49,6 +51,10 @@ export default function TopicDetailScreen() {
     );
   }
 
+  const scopeItems = currentTopic.scope.chapters.flatMap((chapter) => chapter.items);
+  const activeScopeCount = scopeItems.filter((item) => !item.frozen).length;
+  const frozenScopeCount = scopeItems.filter((item) => item.frozen).length;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -66,7 +72,7 @@ export default function TopicDetailScreen() {
       </View>
 
       <View style={styles.tabs}>
-        {(["quiz", "history", "missed", "subtopics"] as const).map((tab) => (
+        {(["quiz", "scope", "history", "missed", "subtopics"] as const).map((tab) => (
           <Pressable
             key={tab}
             style={[styles.tab, activeTab === tab && styles.tabActive]}
@@ -81,12 +87,28 @@ export default function TopicDetailScreen() {
 
       {activeTab === "quiz" && (
         <View style={styles.tabContent}>
+          <Text style={styles.scopeMeta}>
+            {activeScopeCount} active topics
+            {frozenScopeCount > 0 ? ` · ${frozenScopeCount} frozen` : ""}
+          </Text>
           <Pressable
             style={styles.actionButton}
             onPress={() => router.push(`/(app)/quiz/setup?topicId=${id}`)}
           >
             <Text style={styles.actionButtonText}>Start New Quiz</Text>
           </Pressable>
+        </View>
+      )}
+
+      {activeTab === "scope" && (
+        <View style={styles.tabContent}>
+          <TopicEditor
+            topic={currentTopic}
+            onSave={async (data) => {
+              if (!id) return;
+              await updateTopic(id, data);
+            }}
+          />
         </View>
       )}
 
@@ -193,6 +215,7 @@ const styles = StyleSheet.create({
   historyMeta: { fontSize: 14, color: "#666", marginTop: 4 },
   historyDate: { fontSize: 12, color: "#999", marginTop: 4 },
   missedCount: { fontSize: 16, marginBottom: 12 },
+  scopeMeta: { fontSize: 14, color: "#666", marginBottom: 12 },
   subtopicItem: { backgroundColor: "#fff", padding: 16, borderRadius: 8, marginBottom: 8, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   subtopicItemSelected: { backgroundColor: "#eff6ff", borderWidth: 1, borderColor: "#2563eb" },
   subtopicName: { fontSize: 16, fontWeight: "500", flex: 1 },

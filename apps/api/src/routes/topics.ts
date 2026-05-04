@@ -1,13 +1,48 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
-import { topics } from "../db/schema.js";
-import { eq, and } from "drizzle-orm";
+import { questions, topics } from "../db/schema.js";
+import { eq, and, isNotNull } from "drizzle-orm";
 import { z } from "zod";
-import { interpretTopic, detectFormat } from "../services/ai.js";
+import { interpretTopic, detectFormat, generateScope } from "../services/ai.js";
 import { searchWeb } from "../services/search.js";
+import {
+  DEFAULT_MATERIALS,
+  assertScopeIsUsable,
+  defaultScope,
+  mergeScopeWithUsage,
+  normalizeMaterials,
+  normalizeScope,
+} from "../services/scope.js";
 
 const createTopicSchema = z.object({
   description: z.string().min(1).max(500),
+});
+
+const scopeItemSchema = z.object({
+  id: z.string().optional(),
+  title: z.string().min(1).max(200),
+  details: z.string().max(1000).optional().default(""),
+  frozen: z.boolean().optional().default(false),
+});
+
+const scopeSchema = z.object({
+  chapters: z.array(
+    z.object({
+      id: z.string().optional(),
+      title: z.string().min(1).max(200),
+      items: z.array(scopeItemSchema).min(1).max(100),
+    })
+  ).min(1).max(20),
+});
+
+const updateTopicSchema = z.object({
+  description: z.string().min(1).max(500),
+  scope: scopeSchema,
+  materials: z.object({
+    examples: z.string().max(4000).optional().default(""),
+    additionalTopics: z.string().max(2000).optional().default(""),
+    notes: z.string().max(4000).optional().default(""),
+  }),
 });
 
 const confirmFormatSchema = z.object({
@@ -40,6 +75,16 @@ export async function topicRoutes(app: FastifyInstance) {
     }
 
     const format = await detectFormat(description);
+    let scope = defaultScope(description);
+    try {
+      const generatedScope = await generateScope(
+        interpretation.interpretation?.description ?? description
+      );
+      scope = normalizeScope(generatedScope);
+      assertScopeIsUsable(scope);
+    } catch {
+      scope = defaultScope(description);
+    }
 
     const [topic] = await db
       .insert(topics)
@@ -48,6 +93,8 @@ export async function topicRoutes(app: FastifyInstance) {
         title: interpretation.interpretation?.title ?? description,
         description:
           interpretation.interpretation?.description ?? description,
+        scope,
+        materials: DEFAULT_MATERIALS,
         examFormat: format,
       })
       .returning();
@@ -145,5 +192,58 @@ export async function topicRoutes(app: FastifyInstance) {
 
     if (!topic) return reply.status(404).send({ message: "Topic not found" });
     return topic;
+  });
+
+  app.patch("/api/topics/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = updateTopicSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        message: "Invalid input",
+        errors: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const userId = (request.user as { userId: string }).userId;
+    const [topic] = await db
+      .select()
+      .from(topics)
+      .where(and(eq(topics.id, id), eq(topics.userId, userId)))
+      .limit(1);
+
+    if (!topic) return reply.status(404).send({ message: "Topic not found" });
+
+    const usedRows = await db
+      .select({ scopeItemId: questions.scopeItemId })
+      .from(questions)
+      .where(and(eq(questions.topicId, id), isNotNull(questions.scopeItemId)));
+    const usedItemIds = new Set(
+      usedRows.map((row) => row.scopeItemId).filter((value): value is string => Boolean(value))
+    );
+    const scope = mergeScopeWithUsage(
+      normalizeScope(topic.scope),
+      normalizeScope(parsed.data.scope),
+      usedItemIds
+    );
+
+    try {
+      assertScopeIsUsable(scope);
+    } catch (err) {
+      return reply.status(400).send({
+        message: err instanceof Error ? err.message : "Invalid scope",
+      });
+    }
+
+    const [updated] = await db
+      .update(topics)
+      .set({
+        description: parsed.data.description,
+        scope,
+        materials: normalizeMaterials(parsed.data.materials),
+      })
+      .where(eq(topics.id, id))
+      .returning();
+
+    return reply.send(updated);
   });
 }

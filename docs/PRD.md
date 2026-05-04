@@ -14,19 +14,22 @@ AI Quiz is a web application that helps exam candidates prepare for standardized
 ## 3. Use Cases
 
 ### UC-1: Start a New Quiz Topic
-User enters a free-text description of their target exam. AI interprets the scope and, if ambiguous, asks for clarification with suggestions (e.g., "What specific topic or subject would you like to practice?"). AI also detects the exam format (number of choices, single/multi-select) and presents it for user confirmation. If the user rejects, an optional textbox allows them to describe the correct format or what's wrong; the system uses this feedback (plus web search when configured) to improve and asks for review again. Once confirmed, the topic and format are saved to the user's account.
+User enters a free-text description of their target exam. AI interprets the scope and, if ambiguous, asks for clarification with suggestions (e.g., "What specific topic or subject would you like to practice?"). AI also detects the exam format (number of choices, single/multi-select) and proposes a chapter/subtopic scope. The user can edit description, scope, example questions, additional topics, and notes before confirming. If the user rejects, an optional textbox allows them to describe the correct format or what's wrong; the system uses this feedback (plus web search when configured) to improve and asks for review again. Once confirmed, the topic, format, and scope are saved to the user's account.
 
 ### UC-2: Take a Quiz
 User selects a topic and sets the number of questions. Optionally enables a timer. Questions are presented one at a time (flashcard-style). User selects answer(s) and advances. At the end, a summary screen shows results.
 
 ### UC-3: Review Results
-Summary screen displays: score, per-question breakdown with explanations for why each option is correct or incorrect. Missed questions are highlighted and tagged by subtopic.
+Summary screen displays: score, per-question breakdown with explanations for why each option is correct or incorrect. Missed questions are highlighted and tagged by subtopic. Users can flag a reviewed question when they dispute the answer or explanation.
 
 ### UC-4: Retry Missed Questions
 User can retry only the questions they got wrong in a previous session, presented in the same flashcard-style flow.
 
 ### UC-5: Practice Weak Subtopics
 System tracks missed subtopics across sessions. User can choose to generate a new quiz targeting their weakest subtopics specifically.
+
+### UC-7: Edit Topic Scope
+User can edit an existing topic's description, chapters, subtopics, examples, additional topics, and notes. The top-level subject title is locked. Future question generation uses the updated scope; completed quizzes remain unchanged. If a removed subtopic already has generated questions, it is frozen and excluded from future generation/retry until restored.
 
 ### UC-6: View History
 User can browse past quiz sessions per topic, see scores over time, and review any past session's details.
@@ -38,9 +41,10 @@ User can browse past quiz sessions per topic, see scores over time, and review a
 | Feature | Description |
 |---------|-------------|
 | **Free-text topic input** | User types exam description; AI interprets or asks for clarification |
+| **Editable scope** | AI proposes chapters/subtopics; users can edit scope and supplemental materials |
 | **AI question generation** | Generate realistic exam questions matching real exam format (number of choices, single vs. multiple select) |
 | **Explanations** | Every option gets an explanation of why it is correct or incorrect |
-| **Web search verification** | When Brave API is configured, verify question accuracy via web search; otherwise use model's knowledge |
+| **Web search verification** | Use local SearXNG first, Brave fallback when configured, otherwise use model knowledge |
 | **Flashcard-style quiz flow** | One question at a time, answer and advance |
 | **Optional timer** | User can enable/disable a countdown timer per quiz session |
 | **Configurable question count** | User sets number of questions before starting |
@@ -52,7 +56,7 @@ User can browse past quiz sessions per topic, see scores over time, and review a
 | **Weak subtopics tracking** | Aggregate missed subtopics; enable targeted practice |
 | **Quiz history** | Per-topic session history with scores and details |
 | **Exam format confirmation** | AI detects exam format and asks user to confirm; user can reject with feedback, triggering refinement via web search |
-| **Flag question** | Users can flag individual questions as inaccurate/poorly worded; flagged questions are excluded from future sessions and logged for review |
+| **Flag question** | Users can flag individual questions during quiz or results review; flagged questions are excluded from future sessions and logged for review |
 | **Question deduplication** | Track generated question pool per topic; avoid repeating questions across sessions |
 
 ### Phase 2 — Future (Out of Scope for MVP)
@@ -75,7 +79,7 @@ User can browse past quiz sessions per topic, see scores over time, and review a
 4. **Quiz Setup**: Select topic, set question count, toggle timer
 5. **Quiz Flow**: Flashcard-style — question, options, select, next; flag button on each question
 6. **Results Summary**: Score, question-by-question review with explanations; flag button per question (also in answer review when user questions the AI explanation)
-7. **Topic Detail**: History of sessions, missed questions set, weak subtopics
+7. **Topic Detail**: Editable scope/materials, history of sessions, missed questions set, weak subtopics
 8. **Retry / Subtopic Practice**: Same quiz flow, filtered by missed or weak subtopic
 
 ### UX Principles
@@ -109,8 +113,9 @@ User can browse past quiz sessions per topic, see scores over time, and review a
   - Ambiguity detection and clarification requests
 
 ### Web Search (Optional)
-- Brave Search API integration
-- Used for fact-checking generated questions when API key is configured
+- Local SearXNG integration as the primary search provider
+- Brave Search API fallback when API key is configured
+- Used for fact-checking generated questions when search is configured
 - Graceful fallback to model-only generation when not configured
 
 ### Authentication
@@ -120,9 +125,9 @@ User can browse past quiz sessions per topic, see scores over time, and review a
 ## 7. Data Model (High-Level)
 
 - **User**: id, email, password_hash, created_at
-- **Topic**: id, user_id, title, description, exam_format (choices count, single/multi), created_at
+- **Topic**: id, user_id, title, description, scope, materials, exam_format (choices count, single/multi), created_at
 - **QuizSession**: id, topic_id, question_count, timer_enabled, timer_duration, score, completed_at
-- **Question**: id, session_id, topic_id, content, options (JSON), correct_answer(s), explanations (JSON), subtopic_tags[], user_answer, is_correct, is_flagged, flag_reason, content_hash (for deduplication)
+- **Question**: id, session_id, topic_id, scope_item_id, content, options (JSON), correct_answer(s), explanations (JSON), subtopic_tags[], user_answer, is_correct, is_flagged, flag_reason, content_hash (for deduplication)
 - **MissedQuestionSet**: derived from Questions where is_correct=false, per topic
 - **WeakSubtopics**: aggregated from missed question subtopic_tags, per topic
 - **QuestionPool**: per-topic index of content_hash values to prevent duplicate generation across sessions

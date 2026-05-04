@@ -11,6 +11,7 @@ import {
 import { useRouter } from "expo-router";
 import { useTopicStore } from "@/stores/topic";
 import type { TopicCreateResponse } from "@ai-quiz/shared";
+import { TopicEditor } from "@/components/TopicEditor";
 
 export default function NewTopicScreen() {
   const [description, setDescription] = useState("");
@@ -22,6 +23,7 @@ export default function NewTopicScreen() {
 
   const createTopic = useTopicStore((s) => s.createTopic);
   const confirmFormat = useTopicStore((s) => s.confirmFormat);
+  const updateTopic = useTopicStore((s) => s.updateTopic);
   const router = useRouter();
 
   const handleSubmit = async () => {
@@ -104,6 +106,8 @@ export default function NewTopicScreen() {
   }
 
   if (response?.status === "format_detected" && response.examFormat && currentTopicId) {
+    const topic = response.topic;
+    if (!topic) return null;
     return (
       <View style={styles.container}>
         <View style={styles.card}>
@@ -114,6 +118,17 @@ export default function NewTopicScreen() {
           <Text style={styles.cardText}>
             {response.examFormat.isMultiSelect ? "Multiple answers possible" : "Single answer per question"}
           </Text>
+
+          <TopicEditor
+            topic={topic}
+            saveLabel="Save Scope"
+            onSave={async (data) => {
+              const updated = await updateTopic(currentTopicId, data);
+              setResponse((current) =>
+                current ? { ...current, topic: updated } : current
+              );
+            }}
+          />
 
           <View style={styles.rowButtons}>
             <Pressable

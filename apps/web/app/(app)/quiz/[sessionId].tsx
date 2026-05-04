@@ -20,6 +20,7 @@ export default function QuizFlowScreen() {
   const answers = useQuizStore((s) => s.answers);
   const selectAnswer = useQuizStore((s) => s.selectAnswer);
   const nextQuestion = useQuizStore((s) => s.nextQuestion);
+  const prevQuestion = useQuizStore((s) => s.prevQuestion);
   const submitQuiz = useQuizStore((s) => s.submitQuiz);
   const isSubmitting = useQuizStore((s) => s.isSubmitting);
   const timerEnabled = useQuizStore((s) => s.timerEnabled);
@@ -32,6 +33,7 @@ export default function QuizFlowScreen() {
 
   const currentQuestion = questions[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
+  const isFirstQuestion = currentIndex === 0;
   const selectedAnswers = currentQuestion ? answers[currentQuestion.id] || [] : [];
 
   useEffect(() => {
@@ -113,6 +115,9 @@ export default function QuizFlowScreen() {
         </View>
 
         <Text style={styles.questionText}>{currentQuestion.content}</Text>
+        <Text style={styles.answerMode}>
+          {currentQuestion.isMultiSelect ? "Select all that apply" : "Select one answer"}
+        </Text>
 
         {currentQuestion.options.map((option, idx) => (
           <Pressable
@@ -130,6 +135,14 @@ export default function QuizFlowScreen() {
       <View style={styles.footer}>
         <Pressable onPress={() => setFlagModalVisible(true)} style={styles.flagButton}>
           <Text style={styles.flagText}>⚠ Flag</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.previousButton, isFirstQuestion && styles.buttonDisabled]}
+          onPress={prevQuestion}
+          disabled={isFirstQuestion}
+        >
+          <Text style={styles.previousButtonText}>Previous</Text>
         </Pressable>
 
         {isLastQuestion ? (
@@ -192,6 +205,7 @@ const styles = StyleSheet.create({
   tag: { backgroundColor: "#eff6ff", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
   tagText: { fontSize: 12, color: "#2563eb" },
   questionText: { fontSize: 18, fontWeight: "500", marginBottom: 16, lineHeight: 26 },
+  answerMode: { fontSize: 13, color: "#666", marginBottom: 10 },
   optionButton: { borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 14, marginBottom: 8 },
   optionSelected: { borderColor: "#2563eb", backgroundColor: "#eff6ff" },
   optionText: { fontSize: 16, color: "#333" },
@@ -201,6 +215,8 @@ const styles = StyleSheet.create({
   flagText: { color: "#f59e0b", fontSize: 14 },
   submitButton: { backgroundColor: "#16a34a", paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
   submitButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  previousButton: { borderWidth: 1, borderColor: "#2563eb", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8 },
+  previousButtonText: { color: "#2563eb", fontSize: 16, fontWeight: "600" },
   nextButton: { backgroundColor: "#2563eb", paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
   nextButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   buttonDisabled: { opacity: 0.6 },
