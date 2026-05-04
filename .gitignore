@@ -1,2 +1,33 @@
 docs/SESSION_LOG.md
 docs/TASKS.md
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+
+# Environment files
+.env
+.env.local
+
+# Expo
+.expo/
+
+# Local agent/tool artifacts
+.opencode/
+.playwright-mcp/
+.sisyphus/
+
+# Secrets and certificates
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Merge backups
+*.orig.*
+
+# macOS
+.DS_Store

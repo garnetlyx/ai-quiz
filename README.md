@@ -22,6 +22,48 @@ AI-powered exam prep web app. Users describe their target exam in plain text, an
 
 ## Getting Started
 
+### Prerequisites
+- Node.js 20+
+- Docker (for PostgreSQL)
+- An OpenAI-compatible API key
+
+### Setup
+
+1. Clone and install:
+   ```bash
+   npm install
+   ```
+
+2. Copy environment config:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` and set `OPENAI_API_KEY` and `JWT_SECRET`.
+
+3. Start PostgreSQL:
+   ```bash
+   docker compose up -d
+   ```
+
+4. Push database schema:
+   ```bash
+   npm run db:push --workspace=apps/api
+   ```
+
+5. Start development:
+   ```bash
+   # Terminal 1: API
+   npm run dev:api
+
+   # Terminal 2: Web
+   npm run dev:web
+   ```
+
+### Testing
+```bash
+npm run test --workspace=apps/api
+```
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details.
 
 ## License

@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "AI Quiz",
+    "slug": "ai-quiz",
+    "version": "1.0.0",
+    "scheme": "ai-quiz",
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": ["expo-router"]
+  }
+}
