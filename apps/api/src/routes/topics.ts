@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { questions, topics } from "../db/schema.js";
-import { eq, and, isNotNull } from "drizzle-orm";
+import { eq, and, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { interpretTopic, detectFormat, generateScope } from "../services/ai.js";
 import { searchWeb } from "../services/search.js";
@@ -119,7 +119,9 @@ export async function topicRoutes(app: FastifyInstance) {
     const [topic] = await db
       .select()
       .from(topics)
-      .where(and(eq(topics.id, id), eq(topics.userId, userId)))
+      .where(
+        and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt))
+      )
       .limit(1);
 
     if (!topic) return reply.status(404).send({ message: "Topic not found" });
@@ -128,13 +130,15 @@ export async function topicRoutes(app: FastifyInstance) {
       await db
         .update(topics)
         .set({ status: "confirmed" })
-        .where(eq(topics.id, id));
+        .where(and(eq(topics.id, id), isNull(topics.archivedAt)));
 
       const [updated] = await db
         .select()
         .from(topics)
-        .where(eq(topics.id, id))
+        .where(and(eq(topics.id, id), isNull(topics.archivedAt)))
         .limit(1);
+
+      if (!updated) return reply.status(404).send({ message: "Topic not found" });
 
       return reply.send({ topic: updated, examFormat: updated.examFormat });
     }
@@ -160,13 +164,15 @@ export async function topicRoutes(app: FastifyInstance) {
     await db
       .update(topics)
       .set({ examFormat: refinedFormat })
-      .where(eq(topics.id, id));
+      .where(and(eq(topics.id, id), isNull(topics.archivedAt)));
 
     const [updated] = await db
       .select()
       .from(topics)
-      .where(eq(topics.id, id))
+      .where(and(eq(topics.id, id), isNull(topics.archivedAt)))
       .limit(1);
+
+    if (!updated) return reply.status(404).send({ message: "Topic not found" });
 
     return reply.send({ topic: updated, examFormat: refinedFormat });
   });
@@ -176,7 +182,7 @@ export async function topicRoutes(app: FastifyInstance) {
     return db
       .select()
       .from(topics)
-      .where(eq(topics.userId, userId))
+      .where(and(eq(topics.userId, userId), isNull(topics.archivedAt)))
       .orderBy(topics.createdAt);
   });
 
@@ -187,7 +193,9 @@ export async function topicRoutes(app: FastifyInstance) {
     const [topic] = await db
       .select()
       .from(topics)
-      .where(and(eq(topics.id, id), eq(topics.userId, userId)))
+      .where(
+        and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt))
+      )
       .limit(1);
 
     if (!topic) return reply.status(404).send({ message: "Topic not found" });
@@ -208,7 +216,9 @@ export async function topicRoutes(app: FastifyInstance) {
     const [topic] = await db
       .select()
       .from(topics)
-      .where(and(eq(topics.id, id), eq(topics.userId, userId)))
+      .where(
+        and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt))
+      )
       .limit(1);
 
     if (!topic) return reply.status(404).send({ message: "Topic not found" });
@@ -241,9 +251,28 @@ export async function topicRoutes(app: FastifyInstance) {
         scope,
         materials: normalizeMaterials(parsed.data.materials),
       })
-      .where(eq(topics.id, id))
+      .where(and(eq(topics.id, id), isNull(topics.archivedAt)))
       .returning();
 
+    if (!updated) return reply.status(404).send({ message: "Topic not found" });
+
     return reply.send(updated);
+  });
+
+  app.delete("/api/topics/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const userId = (request.user as { userId: string }).userId;
+
+    const [archived] = await db
+      .update(topics)
+      .set({ archivedAt: new Date() })
+      .where(
+        and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt))
+      )
+      .returning({ id: topics.id });
+
+    if (!archived) return reply.status(404).send({ message: "Topic not found" });
+
+    return reply.send({ success: true });
   });
 }

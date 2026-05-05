@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { db } from "../db/index.js";
 import { questions, quizSessions, topics } from "../db/schema.js";
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc, count, isNull } from "drizzle-orm";
 import { generateQuestions } from "./ai.js";
 import { factCheckQuestion } from "./search.js";
 import {
@@ -59,7 +59,7 @@ export async function generateQuizForTopic(
   const [topic] = await db
     .select()
     .from(topics)
-    .where(and(eq(topics.id, topicId), eq(topics.userId, userId)))
+    .where(and(eq(topics.id, topicId), eq(topics.userId, userId), isNull(topics.archivedAt)))
     .limit(1);
 
   if (!topic) throw new Error("Topic not found");
@@ -161,6 +161,7 @@ export async function submitQuizAnswers(
 
   if (!session) throw new Error("Session not found");
   if (session.topics.userId !== userId) throw new Error("Forbidden");
+  if (session.topics.archivedAt) throw new Error("Session not found");
 
   const questionRows = await db
     .select()
@@ -229,6 +230,7 @@ export async function getQuizResults(sessionId: string, userId: string) {
 
   if (!session) throw new Error("Session not found");
   if (session.topics.userId !== userId) throw new Error("Forbidden");
+  if (session.topics.archivedAt) throw new Error("Session not found");
 
   const questionRows = await db
     .select()
@@ -245,7 +247,7 @@ export async function getMissedQuestions(topicId: string, userId: string) {
   const [topic] = await db
     .select()
     .from(topics)
-    .where(and(eq(topics.id, topicId), eq(topics.userId, userId)))
+    .where(and(eq(topics.id, topicId), eq(topics.userId, userId), isNull(topics.archivedAt)))
     .limit(1);
 
   if (!topic) throw new Error("Topic not found");
@@ -270,7 +272,7 @@ export async function getWeakSubtopics(topicId: string, userId: string) {
   const [topic] = await db
     .select()
     .from(topics)
-    .where(and(eq(topics.id, topicId), eq(topics.userId, userId)))
+    .where(and(eq(topics.id, topicId), eq(topics.userId, userId), isNull(topics.archivedAt)))
     .limit(1);
 
   if (!topic) throw new Error("Topic not found");
@@ -351,6 +353,7 @@ export async function flagQuestion(
 
   if (!session) throw new Error("Session not found");
   if (session.topics.userId !== userId) throw new Error("Forbidden");
+  if (session.topics.archivedAt) throw new Error("Session not found");
 
   await db
     .update(questions)
@@ -367,7 +370,7 @@ export async function getQuizHistory(
   const [topic] = await db
     .select()
     .from(topics)
-    .where(and(eq(topics.id, topicId), eq(topics.userId, userId)))
+    .where(and(eq(topics.id, topicId), eq(topics.userId, userId), isNull(topics.archivedAt)))
     .limit(1);
 
   if (!topic) throw new Error("Topic not found");

@@ -15,6 +15,7 @@ interface TopicState {
     feedback?: string
   ) => Promise<void>;
   updateTopic: (id: string, update: TopicUpdateRequest) => Promise<Topic>;
+  deleteTopic: (id: string) => Promise<void>;
 }
 
 export const useTopicStore = create<TopicState>((set) => ({
@@ -62,5 +63,15 @@ export const useTopicStore = create<TopicState>((set) => ({
       topics: state.topics.map((item) => (item.id === id ? topic : item)),
     }));
     return topic;
+  },
+
+  deleteTopic: async (id) => {
+    await api.request<{ success: true }>(`/api/topics/${id}`, {
+      method: "DELETE",
+    });
+    set((state) => ({
+      topics: state.topics.filter((item) => item.id !== id),
+      currentTopic: state.currentTopic?.id === id ? null : state.currentTopic,
+    }));
   },
 }));

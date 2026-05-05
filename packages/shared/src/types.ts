@@ -66,6 +66,7 @@ export interface Topic {
   examFormat: ExamFormat | null;
   status: "draft" | "confirmed";
   createdAt: string;
+  archivedAt: string | null;
 }
 
 export interface TopicCreateRequest {

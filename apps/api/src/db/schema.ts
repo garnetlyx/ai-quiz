@@ -49,6 +49,7 @@ export const topics = pgTable(
       .notNull()
       .default("draft"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
   },
   (table) => [index("topics_user_id_idx").on(table.userId)]
 );

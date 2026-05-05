@@ -6,7 +6,7 @@ import {
 } from "../services/quiz.js";
 import { db } from "../db/index.js";
 import { questions, quizSessions, topics } from "../db/schema.js";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { ExamFormat } from "@ai-quiz/shared";
 
 export async function historyRoutes(app: FastifyInstance) {
@@ -69,7 +69,7 @@ export async function historyRoutes(app: FastifyInstance) {
       const [topic] = await db
         .select()
         .from(topics)
-        .where(and(eq(topics.id, topicId), eq(topics.userId, userId)))
+        .where(and(eq(topics.id, topicId), eq(topics.userId, userId), isNull(topics.archivedAt)))
         .limit(1);
 
       if (!topic) return reply.status(404).send({ message: "Topic not found" });
