@@ -6,6 +6,8 @@ import {
   ActivityIndicator,
   FlatList,
   StyleSheet,
+  TextInput,
+  ScrollView,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useTopicStore } from "@/stores/topic";
@@ -19,12 +21,16 @@ export default function TopicDetailScreen() {
   const currentTopic = useTopicStore((s) => s.currentTopic);
   const fetchTopic = useTopicStore((s) => s.fetchTopic);
   const updateTopic = useTopicStore((s) => s.updateTopic);
+  const confirmFormat = useTopicStore((s) => s.confirmFormat);
   const isLoading = useTopicStore((s) => s.isLoading);
   const [activeTab, setActiveTab] = useState<"quiz" | "scope" | "history" | "missed" | "subtopics">("quiz");
   const [history, setHistory] = useState<QuizHistoryEntry[]>([]);
   const [weakSubtopics, setWeakSubtopics] = useState<WeakSubtopic[]>([]);
   const [selectedSubtopics, setSelectedSubtopics] = useState<Set<string>>(new Set());
   const [missedCount, setMissedCount] = useState(0);
+  const [feedback, setFeedback] = useState("");
+  const [setupError, setSetupError] = useState("");
+  const [isConfirming, setIsConfirming] = useState(false);
 
   useEffect(() => {
     if (id) fetchTopic(id);
@@ -54,6 +60,99 @@ export default function TopicDetailScreen() {
   const scopeItems = currentTopic.scope.chapters.flatMap((chapter) => chapter.items);
   const activeScopeCount = scopeItems.filter((item) => !item.frozen).length;
   const frozenScopeCount = scopeItems.filter((item) => item.frozen).length;
+
+  const handleConfirmFormat = async (confirmed: boolean) => {
+    if (!id) return;
+    setSetupError("");
+    setIsConfirming(true);
+    try {
+      await confirmFormat(id, confirmed, confirmed ? undefined : feedback);
+      if (confirmed) {
+        setActiveTab("quiz");
+      } else {
+        setFeedback("");
+      }
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : "Failed to update setup");
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
+  if (currentTopic.status !== "confirmed") {
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.setupContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()}>
+            <Text style={styles.backLink}>← Back</Text>
+          </Pressable>
+          <Text style={styles.title}>{currentTopic.title}</Text>
+          <Text style={styles.description}>{currentTopic.description}</Text>
+          <Text style={styles.setupStatus}>Setup needed</Text>
+        </View>
+
+        <View style={styles.setupCard}>
+          <Text style={styles.sectionTitle}>Review Exam Format</Text>
+          {currentTopic.examFormat ? (
+            <>
+              <Text style={styles.format}>
+                {currentTopic.examFormat.choicesCount} choices per question
+              </Text>
+              <Text style={styles.format}>
+                {currentTopic.examFormat.isMultiSelect
+                  ? "Multiple answers possible"
+                  : "Single answer per question"}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.description}>No exam format has been detected yet.</Text>
+          )}
+
+          {setupError ? <Text style={styles.error}>{setupError}</Text> : null}
+
+          <TopicEditor
+            topic={currentTopic}
+            saveLabel="Save Scope"
+            onSave={async (data) => {
+              if (!id) return;
+              await updateTopic(id, data);
+            }}
+          />
+
+          <View style={styles.rowButtons}>
+            <Pressable
+              style={[styles.actionButton, styles.confirmButton, isConfirming && styles.disabled]}
+              disabled={isConfirming || !currentTopic.examFormat}
+              onPress={() => handleConfirmFormat(true)}
+            >
+              <Text style={styles.actionButtonText}>
+                {isConfirming ? "Saving..." : "Confirm Setup"}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.actionButton, styles.rejectButton, isConfirming && styles.disabled]}
+              disabled={isConfirming}
+              onPress={() => handleConfirmFormat(false)}
+            >
+              <Text style={styles.actionButtonText}>Wrong Format</Text>
+            </Pressable>
+          </View>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Describe what's wrong before choosing Wrong Format..."
+            value={feedback}
+            onChangeText={setFeedback}
+            placeholderTextColor="#999"
+          />
+        </View>
+      </ScrollView>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -202,6 +301,16 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: "700" },
   description: { fontSize: 14, color: "#666", marginTop: 4 },
   format: { fontSize: 12, color: "#999", marginTop: 4 },
+  setupStatus: { color: "#b45309", fontSize: 13, fontWeight: "600", marginTop: 8 },
+  setupContent: { paddingBottom: 24 },
+  setupCard: { backgroundColor: "#fff", margin: 16, padding: 16, borderRadius: 8, gap: 8 },
+  sectionTitle: { fontSize: 16, fontWeight: "700", marginBottom: 4 },
+  error: { color: "#dc2626", fontSize: 14 },
+  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 12, fontSize: 14, color: "#333", marginTop: 4 },
+  rowButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
+  confirmButton: { flex: 1, backgroundColor: "#16a34a" },
+  rejectButton: { flex: 1, backgroundColor: "#dc2626" },
+  disabled: { opacity: 0.6 },
   tabs: { flexDirection: "row", backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#eee" },
   tab: { flex: 1, paddingVertical: 12, alignItems: "center" },
   tabActive: { borderBottomWidth: 2, borderBottomColor: "#2563eb" },

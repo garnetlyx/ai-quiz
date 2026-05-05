@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   FlatList,
+  ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useTopicStore } from "@/stores/topic";
@@ -61,7 +62,11 @@ export default function NewTopicScreen() {
 
   if (response?.status === "needs_clarification") {
     return (
-      <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Clarification Needed</Text>
           <Text style={styles.cardText}>{response.clarification}</Text>
@@ -101,7 +106,7 @@ export default function NewTopicScreen() {
             <Text style={styles.buttonText}>Submit Again</Text>
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
     );
   }
 
@@ -109,7 +114,11 @@ export default function NewTopicScreen() {
     const topic = response.topic;
     if (!topic) return null;
     return (
-      <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Exam Format Detected</Text>
           <Text style={styles.cardText}>
@@ -153,12 +162,16 @@ export default function NewTopicScreen() {
             placeholderTextColor="#999"
           />
         </View>
-      </View>
+      </ScrollView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.card}>
         <Text style={styles.cardTitle}>New Quiz Topic</Text>
         <Text style={styles.cardSubtext}>
@@ -189,12 +202,13 @@ export default function NewTopicScreen() {
           )}
         </Pressable>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f5f5f5", padding: 16, justifyContent: "center" },
+  container: { flex: 1, backgroundColor: "#f5f5f5" },
+  scrollContent: { flexGrow: 1, padding: 16, justifyContent: "center" },
   card: { backgroundColor: "#fff", padding: 24, borderRadius: 12, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 8, elevation: 4 },
   cardTitle: { fontSize: 22, fontWeight: "700", marginBottom: 8 },
   cardSubtext: { fontSize: 14, color: "#666", marginBottom: 16 },

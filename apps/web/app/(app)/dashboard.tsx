@@ -39,7 +39,12 @@ export default function DashboardScreen() {
         {item.description}
       </Text>
       <View style={styles.topicMeta}>
-        <Text style={styles.topicStatus}>
+        <Text
+          style={[
+            styles.topicStatus,
+            item.status !== "confirmed" && styles.topicStatusDraft,
+          ]}
+        >
           {item.status === "confirmed" ? "Ready" : "Setup needed"}
         </Text>
         {item.examFormat && (
@@ -49,6 +54,9 @@ export default function DashboardScreen() {
           </Text>
         )}
       </View>
+      {item.status !== "confirmed" && (
+        <Text style={styles.resumeSetup}>Resume setup</Text>
+      )}
     </Pressable>
   );
 
@@ -110,5 +118,7 @@ const styles = StyleSheet.create({
   topicDesc: { fontSize: 14, color: "#666", marginBottom: 8 },
   topicMeta: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   topicStatus: { fontSize: 12, color: "#2563eb", fontWeight: "500" },
+  topicStatusDraft: { color: "#b45309" },
   topicFormat: { fontSize: 12, color: "#999" },
+  resumeSetup: { color: "#2563eb", fontSize: 14, fontWeight: "600", marginTop: 12 },
 });
