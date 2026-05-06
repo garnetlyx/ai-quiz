@@ -9,9 +9,69 @@ interface FactCheckResult {
   context: string;
 }
 
+const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || "http://localhost:8080";
 const BRAVE_API_KEY = process.env.BRAVE_API_KEY;
 const BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search";
-const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || "http://localhost:8080";
+
+async function searchExa(
+  query: string,
+  count = 5
+): Promise<SearchResult[]> {
+  const EXA_API_KEY = process.env.EXA_API_KEY;
+  const url = EXA_API_KEY
+    ? `${EXA_MCP_URL}?exaApiKey=${encodeURIComponent(EXA_API_KEY)}`
+    : EXA_MCP_URL;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: EXA_API_KEY ? "web_search_exa" : "web_search",
+          arguments: { query, numResults: count },
+        },
+      }),
+    });
+  } catch {
+    return [];
+  }
+
+  if (!res.ok) return [];
+
+  const body = await res.text();
+
+  // Exa returns SSE: each line is "data: <json>"
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+
+    try {
+      const data = JSON.parse(line.substring(6));
+      const content = data.result?.content?.[0]?.text;
+      if (content) {
+        return [
+          {
+            title: "Exa Web Search",
+            url: "",
+            description: content,
+          },
+        ];
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return [];
+}
 
 async function searchSearxng(
   query: string,
@@ -19,7 +79,10 @@ async function searchSearxng(
 ): Promise<SearchResult[]> {
   if (!SEARXNG_BASE_URL) return [];
 
-  const url = `${SEARXNG_BASE_URL.replace(/\/$/, "")}/search?q=${encodeURIComponent(query)}&format=json&categories=general`;
+  const url = `${SEARXNG_BASE_URL.replace(
+    /\/$/,
+    ""
+  )}/search?q=${encodeURIComponent(query)}&format=json&categories=general`;
   const res = await fetch(url, {
     headers: { Accept: "application/json" },
   });
@@ -73,15 +136,21 @@ export async function searchWeb(
   count = 5
 ): Promise<SearchResult[]> {
   try {
+    const exaResults = await searchExa(query, count);
+    if (exaResults.length > 0) return exaResults;
+
     const searxngResults = await searchSearxng(query, count);
     if (searxngResults.length > 0) return searxngResults;
+
     return searchBrave(query, count);
   } catch {
     try {
-      return await searchBrave(query, count);
-    } catch {
-      return [];
-    }
+      return await searchExa(query, count);
+    } catch {}
+    try {
+      return await searchSearxng(query, count);
+    } catch {}
+    return [];
   }
 }
 
