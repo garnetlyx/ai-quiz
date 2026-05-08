@@ -124,6 +124,7 @@ export async function generateQuestions(params: {
   count: number;
   existingHashes: string[];
   subtopicFilter?: string[];
+  instructions?: string;
   scopeContext?: string;
   scopePlan?: { id: string; title: string; count: number }[];
 }): Promise<GeneratedQuestion[]> {

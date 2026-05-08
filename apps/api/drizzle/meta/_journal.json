@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1778018273059,
+      "tag": "0000_eager_firedrake",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778027282034,
+      "tag": "0001_harsh_the_hood",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778032461335,
+      "tag": "0002_spotty_master_chief",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   activeScopeItems,
+  buildScopeContext,
+  mergeSuggestedScope,
   mergeScopeWithUsage,
+  normalizeMaterials,
   normalizeScope,
 } from "../src/services/scope.js";
 import { buildScopePlan } from "../src/services/quiz.js";
@@ -53,5 +56,64 @@ describe("topic scope", () => {
       { id: "b", title: "B", count: 2 },
       { id: "c", title: "C", count: 1 },
     ]);
+  });
+
+  it("merges suggested scope without duplicating existing topics", () => {
+    const current = normalizeScope({
+      chapters: [
+        {
+          id: "chapter-1",
+          title: "Chapter 1",
+          items: [{ id: "item-1", title: "Ownership", details: "", frozen: false }],
+        },
+      ],
+    });
+    const suggested = normalizeScope({
+      chapters: [
+        {
+          title: "Chapter 1",
+          items: [
+            { title: "Ownership", details: "" },
+            { title: "Transfer", details: "" },
+          ],
+        },
+        {
+          title: "Chapter 2",
+          items: [{ title: "Contracts", details: "" }],
+        },
+      ],
+    });
+
+    const merged = mergeSuggestedScope(current, suggested);
+
+    expect(merged.chapters.find((chapter) => chapter.title === "Chapter 1")?.items.map((item) => item.title)).toEqual(
+      ["Ownership", "Transfer"]
+    );
+    expect(merged.chapters.find((chapter) => chapter.title === "Chapter 2")?.items.map((item) => item.title)).toEqual(
+      ["Contracts"]
+    );
+  });
+
+  it("keeps generation instructions separate from scope material context", () => {
+    const context = buildScopeContext(
+      normalizeScope({
+        chapters: [
+          {
+            title: "General",
+            items: [{ title: "Item 1", details: "", frozen: false }],
+          },
+        ],
+      }),
+      normalizeMaterials({
+        examples: "",
+        additionalTopics: "Foreign language exam Japanese N2",
+        notes: "Key point: inference matters.",
+        instructions: "Provide explanations in Japanese and English.",
+      })
+    );
+
+    expect(context).toContain("Additional topics:\nForeign language exam Japanese N2");
+    expect(context).toContain("Notes:\nKey point: inference matters.");
+    expect(context).not.toContain("Provide explanations in Japanese and English.");
   });
 });

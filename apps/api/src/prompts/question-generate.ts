@@ -6,10 +6,11 @@ export function buildQuestionGenerateMessages(params: {
   count: number;
   existingHashes: string[];
   subtopicFilter?: string[];
+  instructions?: string;
   scopeContext?: string;
   scopePlan?: { id: string; title: string; count: number }[];
 }): ChatCompletionMessageParam[] {
-  const { topic, format, count, existingHashes, subtopicFilter, scopeContext, scopePlan } = params;
+  const { topic, format, count, existingHashes, subtopicFilter, instructions, scopeContext, scopePlan } = params;
 
   let prompt = `Generate ${count} realistic exam questions for: "${topic}"
 
@@ -22,6 +23,10 @@ Format requirements:
 
   if (scopeContext) {
     prompt += `\n\nStudy scope and supplemental material:\n${scopeContext}`;
+  }
+
+  if (instructions) {
+    prompt += `\n\nGeneration instructions:\n${instructions}`;
   }
 
   if (scopePlan && scopePlan.length > 0) {

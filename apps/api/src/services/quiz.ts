@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { db } from "../db/index.js";
-import { questions, quizSessions, topics } from "../db/schema.js";
-import { eq, and, desc, count, isNull } from "drizzle-orm";
+import { materialQuestions, materialTextChunks, questions, quizSessions, topics } from "../db/schema.js";
+import { eq, and, desc, count, isNull, inArray } from "drizzle-orm";
 import { generateQuestions } from "./ai.js";
 import { factCheckQuestion } from "./search.js";
 import {
@@ -45,6 +45,35 @@ export function buildScopePlan(
   return Array.from(counts.values());
 }
 
+function matchesSubtopicFilter(
+  question: { scopeItemId: string | null; subtopicTags: string[] | null },
+  subtopicFilter?: string[]
+) {
+  if (!subtopicFilter || subtopicFilter.length === 0) return true;
+  const normalized = new Set(subtopicFilter.map((item) => item.toLowerCase()));
+  return (
+    (question.scopeItemId && normalized.has(question.scopeItemId.toLowerCase())) ||
+    (question.subtopicTags || []).some((tag) => normalized.has(tag.toLowerCase()))
+  );
+}
+
+async function getActiveMaterialContext(topicId: string) {
+  const chunks = await db
+    .select()
+    .from(materialTextChunks)
+    .where(
+      and(
+        eq(materialTextChunks.topicId, topicId),
+        eq(materialTextChunks.active, true),
+        eq(materialTextChunks.kind, "context")
+      )
+    );
+  return chunks
+    .map((chunk) => `[${chunk.kind}] ${chunk.content}`)
+    .join("\n\n")
+    .slice(0, 5000);
+}
+
 export async function generateQuizForTopic(
   topicId: string,
   questionCount: number,
@@ -80,15 +109,41 @@ export async function generateQuizForTopic(
     .from(questions)
     .where(eq(questions.topicId, topicId));
 
-  const generated = await generateQuestions({
+  const attemptedMaterialRows = await db
+    .select({ materialQuestionId: questions.materialQuestionId })
+    .from(questions)
+    .where(eq(questions.topicId, topicId));
+  const attemptedMaterialIds = new Set(
+    attemptedMaterialRows
+      .map((row) => row.materialQuestionId)
+      .filter((value): value is string => Boolean(value))
+  );
+  const materialBank = await db
+    .select()
+    .from(materialQuestions)
+    .where(
+      and(
+        eq(materialQuestions.topicId, topicId),
+        inArray(materialQuestions.reviewStatus, ["ready", "auto_repaired"]),
+        eq(materialQuestions.active, true)
+      )
+    );
+  const selectedMaterial = materialBank
+    .filter((question) => !attemptedMaterialIds.has(question.id))
+    .filter((question) => matchesSubtopicFilter(question, options?.subtopicFilter))
+    .slice(0, questionCount);
+  const aiCount = Math.max(0, questionCount - selectedMaterial.length);
+  const materialContext = await getActiveMaterialContext(topicId);
+  const generated = aiCount > 0 ? await generateQuestions({
     topic: topic.description,
     format,
-    count: questionCount,
+    count: aiCount,
     existingHashes: existingHashes.map((h) => h.contentHash),
     subtopicFilter: options?.subtopicFilter,
-    scopeContext: buildScopeContext(scope, materials),
+    instructions: materials.instructions,
+    scopeContext: [buildScopeContext(scope, materials), materialContext].filter(Boolean).join("\n\nImported material context:\n"),
     scopePlan,
-  });
+  }) : [];
 
   for (const q of generated) {
     await factCheckQuestion(q.content);
@@ -98,7 +153,7 @@ export async function generateQuizForTopic(
     .insert(quizSessions)
     .values({
       topicId,
-      questionCount: generated.length,
+      questionCount: selectedMaterial.length + generated.length,
       timerEnabled: options?.timerEnabled ?? false,
       timerDurationSeconds: options?.timerDurationSeconds ?? null,
       mode: options?.mode ?? "normal",
@@ -106,24 +161,39 @@ export async function generateQuizForTopic(
     })
     .returning();
 
-  const questionRows = await db
-    .insert(questions)
-    .values(
-      generated.map((q) => ({
-        sessionId: session.id,
-        topicId,
-        content: q.content,
-        options: q.options,
+  const insertValues = [
+    ...selectedMaterial.map((q) => ({
+      sessionId: session.id,
+      topicId,
+      content: q.content,
+      options: q.options,
+      correctAnswers: q.correctAnswers,
+      explanations: q.explanations,
+      subtopicTags: q.subtopicTags,
+      scopeItemId: q.scopeItemId,
+      materialQuestionId: q.id,
+      contentHash: q.contentHash,
+    })),
+    ...generated.map((q) => ({
+      sessionId: session.id,
+      topicId,
+      content: q.content,
+      options: q.options,
       correctAnswers: q.correctAnswers,
       explanations: q.explanations,
       subtopicTags: q.subtopicTags,
       scopeItemId: q.scopeItemId && scopeItemExists(scope, q.scopeItemId)
         ? q.scopeItemId
         : scopePlan[0]?.id ?? null,
+      materialQuestionId: null,
       contentHash: computeContentHash(q.content),
-      }))
-    )
-    .returning();
+    })),
+  ];
+
+  const questionRows = insertValues.length > 0 ? await db
+    .insert(questions)
+    .values(insertValues)
+    .returning() : [];
 
   return {
     session: {

@@ -1,0 +1,1 @@
+ALTER TABLE "topics" ALTER COLUMN "materials" SET DEFAULT '{"examples":"","additionalTopics":"","notes":"","instructions":""}'::jsonb;

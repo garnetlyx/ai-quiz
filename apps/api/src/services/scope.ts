@@ -10,6 +10,7 @@ export const DEFAULT_MATERIALS: TopicMaterials = {
   examples: "",
   additionalTopics: "",
   notes: "",
+  instructions: "",
 };
 
 export function defaultScope(description: string): TopicScope {
@@ -41,6 +42,7 @@ export function normalizeMaterials(value: unknown): TopicMaterials {
     examples: cleanText(input.examples, 4000),
     additionalTopics: cleanText(input.additionalTopics, 2000),
     notes: cleanText(input.notes, 4000),
+    instructions: cleanText(input.instructions, 4000),
   };
 }
 
@@ -142,4 +144,53 @@ export function buildScopeContext(
   ].filter(Boolean);
 
   return [...lines, ...materialLines].join("\n\n");
+}
+
+export function mergeSuggestedScope(
+  current: TopicScope,
+  suggestion: TopicScope
+): TopicScope {
+  const normalizedCurrent = normalizeScope(current);
+  const normalizedSuggestion = normalizeScope(suggestion);
+  const chapters = normalizedCurrent.chapters.map((chapter) => ({
+    ...chapter,
+    items: chapter.items.map((item) => ({ ...item })),
+  }));
+
+  for (const suggestedChapter of normalizedSuggestion.chapters) {
+    const chapterIndex = chapters.findIndex(
+      (chapter) => chapter.title.trim().toLowerCase() === suggestedChapter.title.trim().toLowerCase()
+    );
+
+    if (chapterIndex === -1) {
+      chapters.push({
+        ...suggestedChapter,
+        items: suggestedChapter.items.map((item) => ({ ...item, frozen: false })),
+      });
+      continue;
+    }
+
+    const existingChapter = chapters[chapterIndex];
+    const existingTitles = new Map(
+      existingChapter.items.map((item, index) => [item.title.trim().toLowerCase(), index])
+    );
+
+    for (const suggestedItem of suggestedChapter.items) {
+      const existingIndex = existingTitles.get(suggestedItem.title.trim().toLowerCase());
+      if (existingIndex === undefined) {
+        existingChapter.items.push({ ...suggestedItem, frozen: false });
+        continue;
+      }
+
+      const currentItem = existingChapter.items[existingIndex];
+      if (!currentItem.details && suggestedItem.details) {
+        existingChapter.items[existingIndex] = {
+          ...currentItem,
+          details: suggestedItem.details,
+        };
+      }
+    }
+  }
+
+  return { chapters };
 }

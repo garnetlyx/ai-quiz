@@ -39,7 +39,12 @@ interface TopicEditorProps {
 export function TopicEditor({ topic, onSave, saveLabel = "Save Scope" }: TopicEditorProps) {
   const [description, setDescription] = useState(topic.description);
   const [scope, setScope] = useState<TopicScope>(cloneScope(topic.scope));
-  const [materials, setMaterials] = useState<TopicMaterials>(topic.materials);
+  const [materials, setMaterials] = useState<TopicMaterials>({
+    examples: topic.materials.examples || "",
+    additionalTopics: topic.materials.additionalTopics || "",
+    notes: topic.materials.notes || "",
+    instructions: topic.materials.instructions || "",
+  });
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -228,6 +233,14 @@ export function TopicEditor({ topic, onSave, saveLabel = "Save Scope" }: TopicEd
         value={materials.additionalTopics}
         onChangeText={(additionalTopics) => setMaterials((current) => ({ ...current, additionalTopics }))}
         placeholder="Additional topics"
+        multiline
+        placeholderTextColor="#999"
+      />
+      <TextInput
+        style={[styles.input, styles.textArea]}
+        value={materials.instructions}
+        onChangeText={(instructions) => setMaterials((current) => ({ ...current, instructions }))}
+        placeholder="Generation instructions"
         multiline
         placeholderTextColor="#999"
       />

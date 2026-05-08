@@ -50,6 +50,7 @@ export interface TopicMaterials {
   examples: string;
   additionalTopics: string;
   notes: string;
+  instructions: string;
 }
 
 export interface TopicScope {
@@ -192,6 +193,129 @@ export interface WeakSubtopic {
   missCount: number;
   totalQuestions: number;
   missRate: number;
+}
+
+// Material Import Types
+
+export type MaterialImportStatus = "queued" | "processing" | "completed" | "failed";
+export type MaterialChunkKind = "structure" | "context" | "definition";
+export type MaterialReviewStatus = "ready" | "auto_repaired" | "needs_repair" | "needs_user_review" | "unresolved";
+export type MaterialQuestionSource = "example_question" | "chapter_question" | "exam_question";
+export type MaterialRepairFlag =
+  | "missing_or_extra_options"
+  | "merged_numbered_question"
+  | "prompt_contains_options"
+  | "option_swallowed_text"
+  | "too_short_prompt"
+  | "explicit_ocr_layout_pollution"
+  | "answer_label_not_in_options"
+  | "no_answer_label";
+export type TopicSuggestionType = "scope" | "definition";
+export type TopicSuggestionStatus = "pending" | "approved" | "rejected";
+
+export interface MaterialRepairAction {
+  type: string;
+  status: "pending" | "applied" | "failed" | "not_attempted";
+  note: string;
+}
+
+export interface MaterialRawCandidate {
+  question: string;
+  options: QuestionOption[];
+  answerLabels: ("A" | "B" | "C" | "D")[];
+}
+
+export interface MaterialSourceLocation {
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  sectionTitle: string | null;
+}
+
+export interface MaterialImportSummary {
+  questionCount: number;
+  readyCount: number;
+  autoRepairedCount: number;
+  needsRepairCount: number;
+  needsUserReviewCount: number;
+  unresolvedCount: number;
+  manualReviewRate: number;
+  repairDebtRate: number;
+  contextCount: number;
+  structureCount: number;
+  definitionCount: number;
+  duplicateCount: number;
+  aiVerifiedCount: number;
+  aiFailedVerificationCount: number;
+  webValidatedCount: number;
+  unmatchedAnswerCount: number;
+}
+
+export interface MaterialImportJob {
+  id: string;
+  topicId: string;
+  fileName: string;
+  mimeType: string;
+  status: MaterialImportStatus;
+  progress: number;
+  error: string | null;
+  summary: Partial<MaterialImportSummary>;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface MaterialQuestionBankItem {
+  id: string;
+  topicId: string;
+  content: string;
+  options: QuestionOption[];
+  correctAnswers: number[];
+  explanations: OptionExplanation[];
+  subtopicTags: string[];
+  scopeItemId: string | null;
+  source: MaterialQuestionSource;
+  sourceLocation: Partial<MaterialSourceLocation>;
+  confidence: number;
+  reviewStatus: MaterialReviewStatus;
+  repairFlags: MaterialRepairFlag[];
+  repairActions: MaterialRepairAction[];
+  rawCandidate: Partial<MaterialRawCandidate>;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface MaterialTextChunk {
+  id: string;
+  topicId: string;
+  kind: MaterialChunkKind;
+  content: string;
+  labels: string[];
+  confidence: number;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface TopicUpdateSuggestion {
+  id: string;
+  topicId: string;
+  type: TopicSuggestionType;
+  status: TopicSuggestionStatus;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface MaterialImportCreateResponse {
+  jobs: MaterialImportJob[];
+}
+
+export interface MaterialQuestionUpdateRequest {
+  reviewStatus?: MaterialReviewStatus;
+  content?: string;
+  options?: QuestionOption[];
+  correctAnswers?: number[];
+  active?: boolean;
+  convertToContentKind?: MaterialChunkKind;
 }
 
 export interface QuizHistoryEntry {

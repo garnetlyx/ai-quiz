@@ -24,14 +24,18 @@ class ApiClient {
     const requestHeaders: Record<string, string> = {
       ...headers,
     };
-    if (body !== undefined) {
+    if (body !== undefined && !(body instanceof FormData)) {
       requestHeaders["Content-Type"] = "application/json";
     }
 
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: requestHeaders,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body !== undefined
+        ? body instanceof FormData
+          ? body
+          : JSON.stringify(body)
+        : undefined,
     });
 
     if (res.status === 401) {
