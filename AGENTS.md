@@ -38,3 +38,21 @@ ai-quiz/
 - Security-first: validate all user inputs, parameterized queries only
 - AI prompts live in `apps/api/src/prompts/` as versioned templates
 - Environment config via `.env` files (never commit secrets)
+
+## Material Question Bank
+
+The system supports **unlimited question banks** from multiple sources:
+
+1. **Verified material banks** in `data/<agent>/material-questions.json` — human-curated, extracted from textbooks/PDFs, ready for quiz generation
+2. **AI-generated questions** — the quiz service can derive new questions from existing banks and web search context (Exa primary, SearXNG/Brave fallback), adapting difficulty and format to the user's performance
+3. **Web-enriched questions** — AI can supplement material questions with current information from web search
+
+After registration, users select a topic to start practicing. The system draws from the material bank first, then generates AI-derived questions to fill gaps and adapt to the user's weak areas. Material banks are seed data, not a ceiling.
+
+Question statuses (material banks only):
+- `ready` / `auto_repaired` / `web_verified` / `pdf_verified` / `user_verified` — all usable
+- `discarded` / `needs_repair` — should not appear in production
+
+## Project Skills
+
+- **pdf-extraction**: Dual-column PDF extraction & repair. Auto-handles the common OCR corruption patterns when extracting exam questions from dual-column PDFs (questions left / answers right). See `.opencode/skills/pdf-extraction/SKILL.md`.

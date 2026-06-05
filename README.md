@@ -69,9 +69,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details.
 
 ### Search
 
-The API uses `SEARXNG_BASE_URL` first for web search and fact-check context. The
-local Docker setup exposes SearXNG at `http://localhost:8080`. If SearXNG returns
-no results and `BRAVE_API_KEY` is set, Brave Search is used as a fallback.
+The API uses Exa MCP for web search and fact-check context when `EXA_API_KEY` is
+set. If Exa is unavailable, `SEARXNG_BASE_URL` is used as a fallback (local
+Docker exposes SearXNG at `http://localhost:8080`). If SearXNG also returns no
+results and `BRAVE_API_KEY` is set, Brave Search is used as a final fallback.
 
 ## License
 
