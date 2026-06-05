@@ -137,4 +137,143 @@ D. It eliminates all landlord duties`;
     expect(result.questions[0].repairFlags).toContain("no_answer_label");
     expect(result.report.manualReviewRate).toBe(1);
   });
+
+  describe("repair engine", () => {
+    it("repairs OCR layout pollution", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+1. [PDF_PAGE 3] Which right applies to property next to a river fi fi?
+A. Littoral
+B. Riparian
+C. Avulsion
+D. Reliction
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].question).not.toContain("PDF_PAGE");
+      expect(result.questions[0].question).not.toContain("fi fi");
+      expect(result.questions[0].reviewStatus).toBe("auto_repaired");
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "repair_ocr_layout_pollution", status: "applied" }));
+    });
+
+    it("resegments inline prompt options", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+1. Which term describes river rights? A. Littoral B. Riparian C. Avulsion D. Reliction
+A. Placeholder A
+B. Placeholder B
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].question).toBe("Which term describes river rights?");
+      expect(result.questions[0].options.map((option) => option.text)).toEqual(["Littoral", "Riparian", "Avulsion", "Reliction"]);
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "resegment_prompt_and_options", status: "applied" }));
+    });
+
+    it("splits merged numbered question prompts", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+1. Which right applies to rivers? 2. Which right applies to lakes?
+A. Littoral
+B. Riparian
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].question).toBe("Which right applies to rivers?");
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "split_merged_numbered_questions", status: "applied" }));
+    });
+
+    it("trims swallowed option text", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+1. Which term describes river rights?
+A. Littoral
+B. Riparian
+C. Avulsion
+D. Reliction. 2. Which right applies to lakes? A. Littoral B. Riparian C. Avulsion D. Reliction
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].options.find((option) => option.id === "D")?.text).toBe("Reliction.");
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "trim_swallowed_option_text", status: "applied" }));
+    });
+
+    it("recovers missing options from source context", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+A. Littoral
+1. Which term describes river rights?
+B. Riparian
+C. Avulsion
+D. Reliction
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].options.map((option) => option.id)).toEqual(["A", "B", "C", "D"]);
+      expect(result.questions[0].repairFlags).not.toContain("missing_or_extra_options");
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "recover_options_from_source_context", status: "applied" }));
+    });
+
+    it("recovers short prompts from previous lines", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+Which term describes river rights?
+1. ?
+A. Littoral
+B. Riparian
+C. Avulsion
+D. Reliction
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].question).toBe("Which term describes river rights?");
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "recover_prompt_from_previous_lines", status: "applied" }));
+    });
+
+    it("repairs answer option mapping from explanation text", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+1. Which term describes river rights?
+A. Littoral shore rights
+B. Riparian river rights
+C. Avulsion land movement
+Answer Key
+1. D. Riparian river rights are correct for property next to rivers.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].answerLabels).toEqual(["B"]);
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "repair_answer_option_mapping", status: "applied" }));
+    });
+
+    it("retries answer key lookup with broader context", async () => {
+      const text = `Sample Exam 1
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.
+Chapter Quiz
+1. Which term describes river rights?
+A. Littoral
+B. Riparian
+C. Avulsion
+D. Reliction`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      expect(result.questions[0].answerLabels).toEqual(["B"]);
+      expect(result.questions[0].reviewStatus).toBe("auto_repaired");
+      expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "retry_answer_key_lookup", status: "applied" }));
+    });
+  });
 });

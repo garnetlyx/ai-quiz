@@ -149,8 +149,19 @@ interface AnswerEntry {
   explanation: string;
 }
 
+interface RepairFunctionResult {
+  modified: boolean;
+  raw: RawQuestion;
+  actions: RepairAction[];
+}
+
+interface RepairExecutionResult {
+  raws: RawQuestion[];
+  actionsByRaw: RepairAction[][];
+}
+
 const OPTION_IDS = ["A", "B", "C", "D"] as const;
-const ANSWER_ENTRY_PATTERN = /(?:^|\s)(\d{1,3})[.)]?\s*([A-D])\.?\s*(.*?)(?=\s+\d{1,3}[.)]?\s*[A-D]\.?\s|$)/g;
+const ANSWER_ENTRY_PATTERN = /(?:^|\s)(\d{1,3})[.)-]?\s*([A-D])\.?\s*(.*?)(?=\s+\d{1,3}[.)-]?\s*[A-D]\.?\s|$)/g;
 
 function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -178,6 +189,8 @@ function cleanQuestionText(lines: string[]): string {
 function cleanExtractedText(value: string): string {
   return value
     .replace(/\[PDF_(PAGE|SOURCE)[^\]]*\]/g, " ")
+    .replace(/(?<!\w)fi\s+fi(?!\w)/gi, " ")
+    .replace(/(?<!\w)fl\s+fl(?!\w)/gi, " ")
     .replace(/\bfi(?:\s+fi|\s+fl|\s+fI|\s+Fi){2,}\b/gi, " ")
     .replace(/\bfl(?:\s+fi|\s+fl){2,}\b/gi, " ")
     .replace(/\s*[|_]{1,}\s*/g, " ")
@@ -263,6 +276,22 @@ function cloneContext(context: Context): Context {
   return { ...context };
 }
 
+function cloneRawQuestion(raw: RawQuestion): RawQuestion {
+  return {
+    promptLines: [...raw.promptLines],
+    options: Object.fromEntries(
+      Object.entries(raw.options).map(([id, lines]) => [id, [...(lines || [])]])
+    ) as Partial<Record<"A" | "B" | "C" | "D", string[]>>,
+    answerLabels: [...raw.answerLabels],
+    explanationLines: [...raw.explanationLines],
+    source: raw.source,
+    questionNumber: raw.questionNumber,
+    context: cloneContext(raw.context),
+    lineStart: raw.lineStart,
+    lineEnd: raw.lineEnd,
+  };
+}
+
 function contextForAnswerKey(context: Context): { source: MaterialQuestionSource; context: Context } {
   if (context.examNumber && context.sectionTitle?.startsWith("Sample Exam")) {
     return { source: "exam_question", context: cloneContext(context) };
@@ -272,6 +301,15 @@ function contextForAnswerKey(context: Context): { source: MaterialQuestionSource
 
 function isSectionStart(line: string): boolean {
   return Boolean(parseChapter(line) || parseSampleExam(line) || /^Chapter Quiz$/i.test(line) || /^Sample Questions/i.test(line));
+}
+
+function shouldStopAnswerKeyCollection(line: string, answerKey: { source: MaterialQuestionSource; context: Context }, seenEntries: number): boolean {
+  if (parseChapter(line)) return true;
+
+  const examNumber = parseSampleExam(line);
+  if (examNumber && (answerKey.source !== "exam_question" || examNumber !== answerKey.context.examNumber)) return true;
+
+  return seenEntries > 0 && /^Answer Key/i.test(line);
 }
 
 function collectWindowedAnswerKeys(lines: SourceLine[]): Map<string, Map<number, AnswerEntry>> {
@@ -309,15 +347,12 @@ function collectWindowedAnswerKeys(lines: SourceLine[]): Map<string, Map<number,
     answerKeys.set(key, map);
 
     const backwardStart = Math.max(0, answerKey.index - 24);
-    const forwardEnd = Math.min(lines.length - 1, answerKey.index + (answerKey.source === "exam_question" ? 900 : 260));
+    const forwardEnd = Math.min(lines.length - 1, answerKey.index + (answerKey.source === "exam_question" ? 900 : 600));
     let currentNumber: number | null = null;
     let seenEntries = 0;
 
     for (let index = backwardStart; index <= forwardEnd; index += 1) {
-      if (index !== answerKey.index && index > answerKey.index && isSectionStart(lines[index].text)) {
-        const nextExam = parseSampleExam(lines[index].text);
-        if (!nextExam || nextExam !== answerKey.context.examNumber) break;
-      }
+      if (index !== answerKey.index && index > answerKey.index && shouldStopAnswerKeyCollection(lines[index].text, answerKey, seenEntries)) break;
       if (/^Answer Key/i.test(lines[index].text)) continue;
 
       const entries = answerKeyEntriesFromLine(lines[index].text)
@@ -389,9 +424,9 @@ function repairFlagsForQuestion(
   const structuralText = `${question} ${options.map((option) => option.text).join(" ")}`;
   const flags: RepairFlag[] = [];
   if (options.length !== 4) flags.push("missing_or_extra_options");
-  if (/\b\d{1,3}\.\s+[A-Z][^.?!]{15,}/.test(question)) flags.push("merged_numbered_question");
-  if (/\bA\.\s+[^B]+B\.\s+[^C]+C\./.test(question)) flags.push("prompt_contains_options");
-  if (options.some((option) => option.text.length > 420)) flags.push("option_swallowed_text");
+  if (/\s+\d{1,3}[.)]\s+[A-Z][^.?!]{15,}/.test(question)) flags.push("merged_numbered_question");
+  if (/\bA[.)]\s+[^B]+B[.)]\s+[^C]+C[.)]/.test(question)) flags.push("prompt_contains_options");
+  if (options.some((option) => option.text.length > 420 || /\s+\d{1,3}[.)]\s+[A-Z]/.test(option.text) || /[.!?]\s+[A-D][.)]\s+/.test(option.text))) flags.push("option_swallowed_text");
   if (question.length < 12) flags.push("too_short_prompt");
   if (/would The owner|B\. Riparian rights are water rights|\[PDF_(PAGE|SOURCE)\b|fi(?:\s+fi){2,}|fl(?:\s+fi|\s+fl){2,}/i.test(structuralText)) {
     flags.push("explicit_ocr_layout_pollution");
@@ -410,48 +445,280 @@ function hasStructuralPollution(question: string, options: { text: string }[]): 
 
 function repairActionsForFlags(flags: RepairFlag[]): RepairAction[] {
   const actions: Record<RepairFlag, RepairAction> = {
-    missing_or_extra_options: {
-      type: "recover_options_from_source_context",
-      status: "pending",
-      note: "Recover missing A/B/C/D options from nearby page or line context.",
-    },
-    merged_numbered_question: {
-      type: "split_merged_numbered_questions",
-      status: "pending",
-      note: "Split embedded numbered questions when neighboring option blocks support the split.",
-    },
-    prompt_contains_options: {
-      type: "resegment_prompt_and_options",
-      status: "pending",
-      note: "Move inline A/B/C/D option markers out of the prompt.",
-    },
-    option_swallowed_text: {
-      type: "trim_swallowed_option_text",
-      status: "pending",
-      note: "Trim body, explanation, or next-question text swallowed into an option.",
-    },
-    too_short_prompt: {
-      type: "recover_prompt_from_previous_lines",
-      status: "pending",
-      note: "Recover the prompt from preceding source lines.",
-    },
-    explicit_ocr_layout_pollution: {
-      type: "repair_ocr_layout_pollution",
-      status: "pending",
-      note: "Remove page markers, OCR ligature artifacts, or obvious cross-column pollution.",
-    },
-    answer_label_not_in_options: {
-      type: "repair_answer_option_mapping",
-      status: "pending",
-      note: "Repair answer label mapping after option recovery.",
-    },
-    no_answer_label: {
-      type: "retry_answer_key_or_ai_validation",
-      status: "pending",
-      note: "Retry answer key matching, then use AI/math validation if the candidate is otherwise complete.",
-    },
+    missing_or_extra_options: makeRepairAction("recover_options_from_source_context", "pending", "Recover missing A/B/C/D options from nearby page or line context."),
+    merged_numbered_question: makeRepairAction("split_merged_numbered_questions", "pending", "Split embedded numbered questions when neighboring option blocks support the split."),
+    prompt_contains_options: makeRepairAction("resegment_prompt_and_options", "pending", "Move inline A/B/C/D option markers out of the prompt."),
+    option_swallowed_text: makeRepairAction("trim_swallowed_option_text", "pending", "Trim body, explanation, or next-question text swallowed into an option."),
+    too_short_prompt: makeRepairAction("recover_prompt_from_previous_lines", "pending", "Recover the prompt from preceding source lines."),
+    explicit_ocr_layout_pollution: makeRepairAction("repair_ocr_layout_pollution", "pending", "Remove page markers, OCR ligature artifacts, or obvious cross-column pollution."),
+    answer_label_not_in_options: makeRepairAction("repair_answer_option_mapping", "pending", "Repair answer label mapping after option recovery."),
+    no_answer_label: makeRepairAction("retry_answer_key_lookup", "pending", "Retry answer key matching with broader chapter or exam context."),
   };
-  return flags.map((flag) => actions[flag]);
+  return flags.map((flag) => ({ ...actions[flag] }));
+}
+
+function makeRepairAction(type: string, status: RepairAction["status"], note: string): RepairAction {
+  return { type, status, note };
+}
+
+function rawQuestionText(raw: RawQuestion): string {
+  return cleanQuestionText(raw.promptLines);
+}
+
+function rawOptions(raw: RawQuestion): { id: "A" | "B" | "C" | "D"; text: string }[] {
+  return OPTION_IDS
+    .map((id) => ({ id, text: cleanExtractedText((raw.options[id] || []).join(" ")) }))
+    .filter((option) => option.text.length > 0);
+}
+
+function flagsForRaw(raw: RawQuestion): RepairFlag[] {
+  const options = rawOptions(raw);
+  const correctAnswers = raw.answerLabels
+    .map((label) => options.findIndex((option) => option.id === label))
+    .filter((index) => index >= 0);
+  return repairFlagsForQuestion(rawQuestionText(raw), options, raw.answerLabels, correctAnswers);
+}
+
+function linesNearRaw(raw: RawQuestion, lines: SourceLine[], before: number, after: number): SourceLine[] {
+  return lines.filter((line) => line.number >= raw.lineStart - before && line.number <= raw.lineEnd + after);
+}
+
+function repairOcrLayoutPollution(raw: RawQuestion): RepairFunctionResult {
+  const repaired = cloneRawQuestion(raw);
+  const cleanPart = (value: string) => value
+    .replace(/\[PDF_PAGE\s+\d+\]/g, " ")
+    .replace(/\[PDF_SOURCE[^\]]*\]/g, " ")
+    .replace(/(?<!\w)fi\s+fi(?!\w)/gi, " ")
+    .replace(/(?<!\w)fl\s+fl(?!\w)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const before = JSON.stringify(repaired);
+  repaired.promptLines = repaired.promptLines.map(cleanPart).filter(Boolean);
+  for (const id of OPTION_IDS) {
+    if (repaired.options[id]) repaired.options[id] = repaired.options[id]?.map(cleanPart).filter(Boolean);
+  }
+  repaired.explanationLines = repaired.explanationLines.map(cleanPart).filter(Boolean);
+  const modified = before !== JSON.stringify(repaired);
+  return {
+    modified,
+    raw: repaired,
+    actions: [makeRepairAction(
+      "repair_ocr_layout_pollution",
+      modified ? "applied" : "not_attempted",
+      modified ? "Removed PDF layout markers or isolated ligature artifacts." : "No OCR layout pollution found."
+    )],
+  };
+}
+
+function optionMarkersFromInline(text: string): { id: "A" | "B" | "C" | "D"; index: number; markerLength: number }[] {
+  return Array.from(text.matchAll(/\b([A-D])[.)]\s+/g))
+    .map((match) => ({
+      id: match[1] as "A" | "B" | "C" | "D",
+      index: match.index ?? 0,
+      markerLength: match[0].length,
+    }))
+    .filter((marker, index, markers) => markers.findIndex((candidate) => candidate.id === marker.id) === index)
+    .sort((left, right) => left.index - right.index);
+}
+
+function resegmentPromptAndOptions(raw: RawQuestion): RepairFunctionResult {
+  const text = raw.promptLines.join(" ").replace(/\s+/g, " ").trim();
+  const markers = optionMarkersFromInline(text);
+  const hasMinimumEvidence = ["A", "B", "C"].every((id) => markers.some((marker) => marker.id === id));
+  if (!hasMinimumEvidence || markers[0]?.id !== "A") {
+    return { modified: false, raw, actions: [makeRepairAction("resegment_prompt_and_options", "not_attempted", "Prompt does not contain enough inline option markers.")] };
+  }
+  const repaired = cloneRawQuestion(raw);
+  repaired.promptLines = [text.slice(0, markers[0].index).trim()].filter(Boolean);
+  for (let index = 0; index < markers.length; index += 1) {
+    const marker = markers[index];
+    const next = markers[index + 1];
+    const optionText = text.slice(marker.index + marker.markerLength, next?.index ?? text.length).trim();
+    if (optionText) repaired.options[marker.id] = [optionText];
+  }
+  return { modified: true, raw: repaired, actions: [makeRepairAction("resegment_prompt_and_options", "applied", "Moved inline prompt options into option fields.")] };
+}
+
+function splitMergedQuestion(raw: RawQuestion): { modified: boolean; raws: RawQuestion[]; actions: RepairAction[] } {
+  const text = raw.promptLines.join(" ").replace(/\s+/g, " ").trim();
+  const match = text.match(/\s+(\d{1,3})[.)]\s+[A-Z]/);
+  if (!match || match.index === undefined || match.index < 12) {
+    return { modified: false, raws: [raw], actions: [makeRepairAction("split_merged_numbered_questions", "not_attempted", "No embedded numbered question found.")] };
+  }
+  const nextNumber = Number(match[1]);
+  if (raw.questionNumber !== null && nextNumber <= raw.questionNumber) {
+    return { modified: false, raws: [raw], actions: [makeRepairAction("split_merged_numbered_questions", "failed", "Embedded question number is not sequential evidence.")] };
+  }
+  const first = cloneRawQuestion(raw);
+  const second = cloneRawQuestion(raw);
+  first.promptLines = [text.slice(0, match.index).trim()];
+  second.promptLines = [text.slice(match.index).replace(/^\s*\d{1,3}[.)]\s+/, "").trim()];
+  second.options = {};
+  second.answerLabels = [];
+  second.explanationLines = [];
+  second.questionNumber = nextNumber;
+  second.lineStart = raw.lineEnd;
+  return { modified: true, raws: [first, second], actions: [makeRepairAction("split_merged_numbered_questions", "applied", "Split embedded numbered question into a new candidate.")] };
+}
+
+function trimSwallowedOptionText(raw: RawQuestion): RepairFunctionResult {
+  const repaired = cloneRawQuestion(raw);
+  let modified = false;
+  for (const id of OPTION_IDS) {
+    const current = (repaired.options[id] || []).join(" ").replace(/\s+/g, " ").trim();
+    if (!current) continue;
+    const optionBoundary = current.search(/[.!?]\s+[A-D][.)]\s+/);
+    const boundaries = [
+      current.search(/\s+\d{1,3}[.)]\s+[A-Z]/),
+      optionBoundary >= 0 ? optionBoundary + 1 : -1,
+      current.length > 420 ? current.slice(0, 420).lastIndexOf(" ") : -1,
+    ].filter((index) => index > 2);
+    if (boundaries.length === 0) continue;
+    repaired.options[id] = [current.slice(0, Math.min(...boundaries)).trim()];
+    modified = true;
+  }
+  return {
+    modified,
+    raw: repaired,
+    actions: [makeRepairAction(
+      "trim_swallowed_option_text",
+      modified ? "applied" : "not_attempted",
+      modified ? "Trimmed swallowed next-question or option text." : "No swallowed option text found."
+    )],
+  };
+}
+
+function recoverOptionsFromSourceContext(raw: RawQuestion, lines: SourceLine[]): RepairFunctionResult {
+  const missing = OPTION_IDS.filter((id) => !(raw.options[id] || []).join(" ").trim());
+  if (missing.length === 0) {
+    return { modified: false, raw, actions: [makeRepairAction("recover_options_from_source_context", "not_attempted", "All options already present.")] };
+  }
+  const repaired = cloneRawQuestion(raw);
+  let currentId: "A" | "B" | "C" | "D" | null = null;
+  for (const line of linesNearRaw(raw, lines, 8, 20)) {
+    if (line.number > raw.lineEnd && numberedQuestionMatch(line.text)) break;
+    if (line.number > raw.lineEnd && isSectionStart(line.text)) break;
+    if (/^Answer Key/i.test(line.text)) break;
+    const option = optionMatch(line.text);
+    if (option) {
+      currentId = option.id;
+      if (missing.includes(option.id) && !(repaired.options[option.id] || []).join(" ").trim()) {
+        repaired.options[option.id] = [option.text];
+      }
+      continue;
+    }
+    if (currentId && missing.includes(currentId) && repaired.options[currentId]?.length) {
+      repaired.options[currentId]?.push(line.text);
+    }
+  }
+  const modified = missing.some((id) => (repaired.options[id] || []).join(" ").trim().length > 0);
+  return {
+    modified,
+    raw: repaired,
+    actions: [makeRepairAction(
+      "recover_options_from_source_context",
+      modified ? "applied" : "failed",
+      modified ? "Recovered missing option labels from nearby source lines." : "Could not recover missing option labels from source context."
+    )],
+  };
+}
+
+function recoverShortPrompt(raw: RawQuestion, lines: SourceLine[]): RepairFunctionResult {
+  if (rawQuestionText(raw).length >= 12) {
+    return { modified: false, raw, actions: [makeRepairAction("recover_prompt_from_previous_lines", "not_attempted", "Prompt is not too short.")] };
+  }
+  const candidates = lines
+    .filter((line) => line.number >= raw.lineStart - 6 && line.number < raw.lineStart)
+    .map((line) => line.text)
+    .filter((line) => line.length >= 12 && !optionMatch(line) && !answerKeyEntryMatch(line) && !isSectionStart(line) && !/^Answer Key/i.test(line));
+  const recovered = candidates.find((line) => /\?$/.test(line)) || candidates[candidates.length - 1];
+  if (!recovered) {
+    return { modified: false, raw, actions: [makeRepairAction("recover_prompt_from_previous_lines", "failed", "Could not find a preceding prompt line.")] };
+  }
+  const repaired = cloneRawQuestion(raw);
+  repaired.promptLines = [recovered];
+  return { modified: true, raw: repaired, actions: [makeRepairAction("recover_prompt_from_previous_lines", "applied", "Recovered short prompt from previous source lines.")] };
+}
+
+function normalizedTokenSet(value: string): Set<string> {
+  return new Set(value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((token) => token.length > 2));
+}
+
+function repairAnswerOptionMapping(raw: RawQuestion): RepairFunctionResult {
+  const explanation = cleanExtractedText(raw.explanationLines.join(" "));
+  if (!explanation || raw.answerLabels.every((label) => (raw.options[label] || []).join(" ").trim())) {
+    return { modified: false, raw, actions: [makeRepairAction("repair_answer_option_mapping", "not_attempted", "Answer label already maps to an option or no answer text exists.")] };
+  }
+  const answerTokens = normalizedTokenSet(explanation);
+  let best: { id: "A" | "B" | "C" | "D"; score: number } | null = null;
+  for (const option of rawOptions(raw)) {
+    const optionTokens = normalizedTokenSet(option.text);
+    const overlap = [...optionTokens].filter((token) => answerTokens.has(token)).length;
+    const score = optionTokens.size > 0 ? overlap / optionTokens.size : 0;
+    if (!best || score > best.score) best = { id: option.id, score };
+  }
+  if (!best || best.score < 0.6) {
+    return { modified: false, raw, actions: [makeRepairAction("repair_answer_option_mapping", "failed", "Could not fuzzy-match answer text to an option.")] };
+  }
+  const repaired = cloneRawQuestion(raw);
+  repaired.answerLabels = [best.id];
+  return { modified: true, raw: repaired, actions: [makeRepairAction("repair_answer_option_mapping", "applied", "Mapped answer text to the closest option by token overlap.")] };
+}
+
+function retryAnswerKeyLookup(raw: RawQuestion, answerKeys: Map<string, Map<number, AnswerEntry>>): RepairFunctionResult {
+  if (raw.answerLabels.length > 0 || !raw.questionNumber) {
+    return { modified: false, raw, actions: [makeRepairAction("retry_answer_key_lookup", "not_attempted", "Answer label already present or question has no number.")] };
+  }
+  const keys = [
+    answerKeyContext(raw.source, raw.context),
+    answerKeyContext(raw.source === "exam_question" ? "chapter_question" : "exam_question", raw.context),
+    `chapter:${raw.context.chapterNumber ?? "unknown"}`,
+    `exam:${raw.context.examNumber ?? "unknown"}`,
+  ];
+  for (const key of Array.from(new Set(keys))) {
+    const entry = answerKeys.get(key)?.get(raw.questionNumber);
+    if (!entry) continue;
+    const repaired = cloneRawQuestion(raw);
+    repaired.answerLabels = entry.labels;
+    if (entry.explanation) repaired.explanationLines = [entry.explanation];
+    return { modified: true, raw: repaired, actions: [makeRepairAction("retry_answer_key_lookup", "applied", `Recovered answer key from ${key}.`)] };
+  }
+  return { modified: false, raw, actions: [makeRepairAction("retry_answer_key_lookup", "failed", "No broader answer key context matched this question.")] };
+}
+
+function executeRepairs(raw: RawQuestion, flags: RepairFlag[], lines: SourceLine[], answerKeys: Map<string, Map<number, AnswerEntry>>): RepairExecutionResult {
+  let candidates = [{ raw: cloneRawQuestion(raw), actions: [] as RepairAction[] }];
+  const runSingle = (repair: (candidate: RawQuestion) => RepairFunctionResult) => {
+    candidates = candidates.map((candidate) => {
+      const result = repair(candidate.raw);
+      return { raw: result.raw, actions: [...candidate.actions, ...result.actions] };
+    });
+  };
+  runSingle(repairOcrLayoutPollution);
+  runSingle(resegmentPromptAndOptions);
+  candidates = candidates.flatMap((candidate) => {
+    const result = splitMergedQuestion(candidate.raw);
+    return result.raws.map((splitRaw) => ({ raw: splitRaw, actions: [...candidate.actions, ...result.actions] }));
+  });
+  runSingle(trimSwallowedOptionText);
+  candidates = candidates.map((candidate) => {
+    const result = recoverOptionsFromSourceContext(candidate.raw, lines);
+    return { raw: result.raw, actions: [...candidate.actions, ...result.actions] };
+  });
+  candidates = candidates.map((candidate) => {
+    const result = recoverShortPrompt(candidate.raw, lines);
+    return { raw: result.raw, actions: [...candidate.actions, ...result.actions] };
+  });
+  runSingle(repairAnswerOptionMapping);
+  candidates = candidates.map((candidate) => {
+    const result = retryAnswerKeyLookup(candidate.raw, answerKeys);
+    return { raw: result.raw, actions: [...candidate.actions, ...result.actions] };
+  });
+  const relevantActionTypes = new Set(repairActionsForFlags(flags).map((action) => action.type));
+  return {
+    raws: candidates.map((candidate) => candidate.raw),
+    actionsByRaw: candidates.map((candidate) => candidate.actions.filter((action) => relevantActionTypes.has(action.type) || action.status === "applied")),
+  };
 }
 
 function finalizeRawQuestion(rawQuestions: RawQuestion[], current: RawQuestion | null): RawQuestion | null {
@@ -463,7 +730,7 @@ function finalizeRawQuestion(rawQuestions: RawQuestion[], current: RawQuestion |
   return null;
 }
 
-function normalizeRawQuestion(raw: RawQuestion, filePath: string, sequence: number): MaterialQuestion {
+function normalizeRawQuestion(raw: RawQuestion, filePath: string, sequence: number, repairActions: RepairAction[] = []): MaterialQuestion {
   const question = cleanQuestionText(raw.promptLines);
   const options = OPTION_IDS
     .map((id) => ({ id, text: cleanExtractedText((raw.options[id] || []).join(" ")) }))
@@ -493,17 +760,20 @@ function normalizeRawQuestion(raw: RawQuestion, filePath: string, sequence: numb
   if (options.length !== 4) confidence = Math.min(confidence, 0.75);
   if (hasPollution) confidence = Math.min(confidence, 0.75);
   confidence = Math.min(1, Number(confidence.toFixed(2)));
+  const hasAppliedRepair = repairActions.some((action) => action.status === "applied");
+  const isStructurallyValid = !isMalformed && !repairFlags.includes("answer_label_not_in_options");
   const reviewStatus: ReviewStatus = isMalformed
     ? "needs_repair"
     : repairFlags.includes("answer_label_not_in_options")
       ? "needs_repair"
-      : repairFlags.includes("no_answer_label")
-        ? "needs_user_review"
-        : confidence >= 0.8
-          ? "ready"
-          : (confidence >= 0.75 && correctAnswers.length > 0 && options.length === 4)
+      : hasAppliedRepair && isStructurallyValid
+        ? "auto_repaired"
+        : repairFlags.includes("no_answer_label")
+          ? "needs_user_review"
+          : confidence >= 0.75
             ? "ready"
             : "needs_user_review";
+  const finalRepairActions = repairActions.length > 0 ? repairActions : repairActionsForFlags(repairFlags);
 
   return {
     id: `material-${contentHash.slice(0, 16)}-${sequence}`,
@@ -529,7 +799,7 @@ function normalizeRawQuestion(raw: RawQuestion, filePath: string, sequence: numb
     confidence,
     reviewStatus,
     repairFlags,
-    repairActions: repairActionsForFlags(repairFlags),
+    repairActions: finalRepairActions,
     rawCandidate: {
       question,
       options,
@@ -854,8 +1124,17 @@ export async function extractMaterialQuestions(params: {
     await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, verifyNext));
   }
 
-  const questions = rawQuestions
-    .map((raw, index) => normalizeRawQuestion(raw, params.filePath, index + 1))
+  const repairedQuestions = rawQuestions.flatMap((raw) => {
+    const flags = flagsForRaw(raw);
+    const result = executeRepairs(raw, flags, normalizedLines, answerKeys);
+    return result.raws.map((repairedRaw, index) => ({
+      raw: repairedRaw,
+      actions: result.actionsByRaw[index] || [],
+    }));
+  });
+
+  const questions = repairedQuestions
+    .map((candidate, index) => normalizeRawQuestion(candidate.raw, params.filePath, index + 1, candidate.actions))
     .filter((question) => question.question.length > 0 && question.options.length >= 2);
 
   const seenHashes = new Map<string, string>();
