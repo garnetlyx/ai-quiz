@@ -7,10 +7,19 @@ import {
   Modal,
   ActivityIndicator,
   StyleSheet,
+  Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuizStore } from "@/stores/quiz";
 import { api } from "@/services/api";
+
+type FlagCategory = "wrong_answer" | "misleading_explanation" | "question_unclear";
+
+const FLAG_CATEGORIES: { value: FlagCategory; label: string }[] = [
+  { value: "wrong_answer", label: "Wrong answer" },
+  { value: "misleading_explanation", label: "Misleading explanation" },
+  { value: "question_unclear", label: "Question unclear" },
+];
 
 export default function QuizFlowScreen() {
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
@@ -28,6 +37,7 @@ export default function QuizFlowScreen() {
 
   const [flagModalVisible, setFlagModalVisible] = useState(false);
   const [flagReason, setFlagReason] = useState("");
+  const [flagCategory, setFlagCategory] = useState<FlagCategory>("wrong_answer");
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -69,10 +79,11 @@ export default function QuizFlowScreen() {
     try {
       await api.request(`/api/quiz/${sessionId}/questions/${currentQuestion.id}/flag`, {
         method: "POST",
-        body: { reason: flagReason },
+        body: { reason: flagReason, category: flagCategory },
       });
       setFlagModalVisible(false);
       setFlagReason("");
+      setFlagCategory("wrong_answer");
     } catch {
       alert("Failed to flag question");
     }
@@ -168,6 +179,23 @@ export default function QuizFlowScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Flag Question</Text>
+
+            <Text style={styles.categoryLabel}>Category</Text>
+            {FLAG_CATEGORIES.map((cat) => (
+              <Pressable
+                key={cat.value}
+                style={[styles.categoryOption, flagCategory === cat.value && styles.categoryOptionSelected]}
+                onPress={() => setFlagCategory(cat.value)}
+              >
+                <View style={styles.radioOuter}>
+                  {flagCategory === cat.value && <View style={styles.radioInner} />}
+                </View>
+                <Text style={[styles.categoryText, flagCategory === cat.value && styles.categoryTextSelected]}>
+                  {cat.label}
+                </Text>
+              </Pressable>
+            ))}
+
             <TextInput
               style={styles.modalInput}
               placeholder="Why is this question problematic?"
@@ -176,8 +204,22 @@ export default function QuizFlowScreen() {
               multiline
               placeholderTextColor="#999"
             />
+
+            {currentQuestion && (
+              <Pressable
+                style={styles.googleSearchButton}
+                onPress={() => {
+                  if (Platform.OS === "web") {
+                    window.open(`https://www.google.com/search?q=${encodeURIComponent(currentQuestion.content)}`, "_blank");
+                  }
+                }}
+              >
+                <Text style={styles.googleSearchButtonText}>Search this question on Google</Text>
+              </Pressable>
+            )}
+
             <View style={styles.modalButtons}>
-              <Pressable style={styles.modalCancel} onPress={() => setFlagModalVisible(false)}>
+              <Pressable style={styles.modalCancel} onPress={() => { setFlagModalVisible(false); setFlagReason(""); setFlagCategory("wrong_answer"); }}>
                 <Text>Cancel</Text>
               </Pressable>
               <Pressable style={styles.modalSubmit} onPress={handleFlag}>
@@ -228,4 +270,13 @@ const styles = StyleSheet.create({
   modalCancel: { padding: 10 },
   modalSubmit: { backgroundColor: "#f59e0b", padding: 10, borderRadius: 6 },
   modalSubmitText: { color: "#fff", fontWeight: "600" },
+  categoryLabel: { fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 },
+  categoryOption: { flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, marginBottom: 4, borderWidth: 1, borderColor: "#e5e7eb" },
+  categoryOptionSelected: { borderColor: "#f59e0b", backgroundColor: "#fffbeb" },
+  categoryText: { fontSize: 14, color: "#666", marginLeft: 8 },
+  categoryTextSelected: { color: "#b45309", fontWeight: "600" },
+  radioOuter: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: "#ccc", alignItems: "center", justifyContent: "center" },
+  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#f59e0b" },
+  googleSearchButton: { backgroundColor: "#f1f5f9", borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 8, padding: 10, marginBottom: 16, alignItems: "center" },
+  googleSearchButtonText: { color: "#475569", fontSize: 14, fontWeight: "500" },
 });
