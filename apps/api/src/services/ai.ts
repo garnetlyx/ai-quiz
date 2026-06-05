@@ -1,12 +1,81 @@
 import OpenAI from "openai";
+import { z } from "zod";
 import { buildTopicInterpretMessages } from "../prompts/topic-interpret.js";
 import { buildFormatDetectMessages } from "../prompts/format-detect.js";
 import { buildQuestionGenerateMessages } from "../prompts/question-generate.js";
 import { buildScopeGenerateMessages } from "../prompts/scope-generate.js";
 
+const topicInterpretResultSchema: z.ZodType<
+  TopicInterpretResult,
+  z.ZodTypeDef,
+  unknown
+> = z
+  .object({
+    needsClarification: z.boolean(),
+    clarification: z.string().nullable().optional(),
+    suggestedTopics: z.array(z.string()).nullable().optional(),
+    interpretation: z
+      .object({
+        title: z.string(),
+        description: z.string(),
+      })
+      .nullable()
+      .optional(),
+  })
+  .transform(({ clarification, suggestedTopics, interpretation, ...result }) => ({
+    ...result,
+    ...(clarification != null ? { clarification } : {}),
+    ...(suggestedTopics != null ? { suggestedTopics } : {}),
+    ...(interpretation != null ? { interpretation } : {}),
+  }));
+
+const examFormatResultSchema = z.object({
+  choicesCount: z.number().int().min(2).max(10),
+  isMultiSelect: z.boolean(),
+  rationale: z.string(),
+});
+
+const scopeGenerateResultSchema = z.object({
+  chapters: z.array(
+    z.object({
+      title: z.string(),
+      items: z.array(
+        z.object({
+          title: z.string(),
+          details: z.string().optional(),
+        })
+      ),
+    })
+  ),
+});
+
+const generatedQuestionSchema = z.object({
+  content: z.string(),
+  options: z.array(
+    z.object({
+      id: z.string(),
+      text: z.string(),
+    })
+  ),
+  correctAnswers: z.array(z.number().int().min(0)),
+  explanations: z.array(
+    z.object({
+      optionId: z.string(),
+      isCorrect: z.boolean(),
+      explanation: z.string(),
+    })
+  ),
+  subtopicTags: z.array(z.string()),
+  scopeItemId: z.string().nullable().optional(),
+});
+
+const questionGenerateResultSchema = z.object({
+  questions: z.array(generatedQuestionSchema).optional(),
+});
+
 let _client: OpenAI | null = null;
 
-function getClient(): OpenAI {
+export function getClient(): OpenAI {
   if (!_client) {
     _client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY || "dummy",
@@ -41,11 +110,11 @@ interface GeneratedQuestion {
   scopeItemId?: string | null;
 }
 
-function getModel(): string {
+export function getModel(): string {
   return process.env.OPENAI_MODEL || "gpt-4o";
 }
 
-function parseJsonObject(content: string | null): unknown {
+export function parseJsonObject(content: string | null): unknown {
   if (!content) throw new Error("AI returned an empty response");
 
   try {
@@ -57,7 +126,7 @@ function parseJsonObject(content: string | null): unknown {
   }
 }
 
-function getMessageContent(response: unknown): string | null {
+export function getMessageContent(response: unknown): string | null {
   const parsed =
     typeof response === "string" ? parseJsonObject(response) : response;
 
@@ -74,6 +143,21 @@ function getMessageContent(response: unknown): string | null {
   return typeof content === "string" ? content : null;
 }
 
+export function validateAiResponse<T>(
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  parsed: unknown,
+  context: string
+): T {
+  try {
+    return schema.parse(parsed);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      throw new Error(`AI response validation failed for ${context}: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
 export async function interpretTopic(
   userInput: string
 ): Promise<TopicInterpretResult> {
@@ -85,7 +169,12 @@ export async function interpretTopic(
     temperature: 0.3,
   });
 
-  return parseJsonObject(getMessageContent(response)) as TopicInterpretResult;
+  const parsed = parseJsonObject(getMessageContent(response));
+  return validateAiResponse(
+    topicInterpretResultSchema,
+    parsed,
+    "topic interpretation"
+  );
 }
 
 export async function detectFormat(
@@ -99,7 +188,8 @@ export async function detectFormat(
     temperature: 0.2,
   });
 
-  return parseJsonObject(getMessageContent(response)) as ExamFormatResult;
+  const parsed = parseJsonObject(getMessageContent(response));
+  return validateAiResponse(examFormatResultSchema, parsed, "format detection");
 }
 
 export async function generateScope(topicDescription: string): Promise<{
@@ -113,9 +203,8 @@ export async function generateScope(topicDescription: string): Promise<{
     temperature: 0.3,
   });
 
-  return parseJsonObject(getMessageContent(response)) as {
-    chapters: { title: string; items: { title: string; details?: string }[] }[];
-  };
+  const parsed = parseJsonObject(getMessageContent(response));
+  return validateAiResponse(scopeGenerateResultSchema, parsed, "scope generation");
 }
 
 export async function generateQuestions(params: {
@@ -136,8 +225,11 @@ export async function generateQuestions(params: {
     temperature: 0.7,
   });
 
-  const parsed = parseJsonObject(getMessageContent(response)) as {
-    questions?: GeneratedQuestion[];
-  };
-  return parsed.questions || [];
+  const parsed = parseJsonObject(getMessageContent(response));
+  const validated = validateAiResponse(
+    questionGenerateResultSchema,
+    parsed,
+    "question generation"
+  );
+  return validated.questions || [];
 }
