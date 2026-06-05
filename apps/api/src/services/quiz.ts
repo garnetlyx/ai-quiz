@@ -354,25 +354,42 @@ export async function generateQuizForTopic(
     isMultiSelect: format.isMultiSelect,
   };
 
+async function retryGenerateAi(
+  sessionId: string,
+  topicId: string,
+  topicDescription: string,
+  format: ExamFormat,
+  aiCount: number,
+  existingHashes: { contentHash: string }[],
+  options: {
+    subtopicFilter?: string[];
+    agent?: AiAgent;
+  } | undefined,
+  materials: { instructions?: string } | undefined,
+  scope: TopicScope | undefined,
+  scopePlan: { id: string; title: string; count: number }[] | undefined,
+  retriesLeft: number,
+) {
+  try {
+    await generateAiQuestions(sessionId, topicId, topicDescription, format, aiCount, existingHashes, options, materials, scope, scopePlan);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[generateAiQuestions] Failed for session ${sessionId} (${retriesLeft} retries left): ${msg}`);
+    if (retriesLeft > 0) {
+      await new Promise((r) => setTimeout(r, 5000));
+      return retryGenerateAi(sessionId, topicId, topicDescription, format, aiCount, existingHashes, options, materials, scope, scopePlan, retriesLeft - 1);
+    }
+    await db.update(quizSessions)
+      .set({ questionCount: 0 })
+      .where(eq(quizSessions.id, sessionId))
+      .catch(() => undefined);
+  }
+}
+
   if (aiCount > 0) {
-    setTimeout(() => generateAiQuestions(
-      session.id,
-      topicId,
-      topic.description,
-      format,
-      aiCount,
-      existingHashes,
-      options,
-      materials,
-      scope,
-      scopePlan,
-    ).catch((err) => {
-      console.error(`[generateAiQuestions] Failed for session ${session.id}:`, err instanceof Error ? err.message : err);
-      db.update(quizSessions)
-        .set({ questionCount: selectedMaterial.length })
-        .where(eq(quizSessions.id, session.id))
-        .catch(() => undefined);
-    }), 0);
+    setTimeout(() => retryGenerateAi(
+      session.id, topicId, topic.description, format, aiCount, existingHashes, options, materials, scope, scopePlan, 3,
+    ), 0);
   }
 
   return result;
