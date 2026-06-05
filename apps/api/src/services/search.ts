@@ -4,11 +4,6 @@ interface SearchResult {
   description: string;
 }
 
-interface FactCheckResult {
-  relevant: boolean;
-  context: string;
-}
-
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const SEARXNG_BASE_URL = process.env.SEARXNG_BASE_URL || "http://localhost:8080";
 const BRAVE_API_KEY = process.env.BRAVE_API_KEY;
@@ -154,14 +149,3 @@ export async function searchWeb(
   }
 }
 
-export async function factCheckQuestion(
-  questionContent: string
-): Promise<FactCheckResult | null> {
-  const results = await searchWeb(questionContent);
-  if (results.length === 0) return null;
-
-  return {
-    relevant: true,
-    context: results.map((r) => `${r.title}: ${r.description}`).join("\n"),
-  };
-}
