@@ -397,7 +397,7 @@ export default function TopicDetailScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()}>
+          <Pressable onPress={() => router.push("/(app)/dashboard")}>
             <Text style={styles.backLink}>← Back</Text>
           </Pressable>
           <Text style={styles.title}>{currentTopic.title}</Text>
@@ -467,7 +467,7 @@ export default function TopicDetailScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()}>
+        <Pressable onPress={() => router.push("/(app)/dashboard")}>
           <Text style={styles.backLink}>← Back</Text>
         </Pressable>
         <Text style={styles.title}>{currentTopic.title}</Text>
