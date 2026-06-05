@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import { db } from "../db/index.js";
 import { materialQuestions, materialTextChunks, questions, quizSessions, topics } from "../db/schema.js";
 import { eq, and, desc, count, isNull, isNotNull, inArray } from "drizzle-orm";
-import { generateQuestions, getClient, getModel, parseJsonObject, getMessageContent, validateAiResponse } from "./ai.js";
+import { generateQuestions, getClient, getModel, parseJsonObject, getMessageContent, validateAiResponse, resolveModel, isValidAgent, type AiAgent } from "./ai.js";
 import { searchWeb } from "./search.js";
 import { buildFlagVerifyMessages } from "../prompts/flag-verify.js";
 import {
@@ -37,7 +37,7 @@ const flagVerifyResultSchema = z.object({
   })).default([]),
 });
 
-export async function verifyFlaggedQuestion(questionId: string): Promise<void> {
+export async function verifyFlaggedQuestion(questionId: string, agent: AiAgent = "glm"): Promise<void> {
   const [question] = await db
     .select()
     .from(questions)
@@ -58,7 +58,7 @@ export async function verifyFlaggedQuestion(questionId: string): Promise<void> {
     });
 
     const response = await getClient().chat.completions.create({
-      model: getModel(),
+      model: resolveModel(agent),
       messages,
       response_format: { type: "json_object" },
       temperature: 0.2,
@@ -119,6 +119,68 @@ export async function verifyFlaggedQuestion(questionId: string): Promise<void> {
   }
 }
 
+function shuffle<T>(array: T[]): T[] {
+  const result = [...array];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function stratifiedSample<T extends { scopeItemId: string | null; subtopicTags: string[] | null }>(
+  pool: T[],
+  count: number,
+  scopePlan: { id: string; count: number }[]
+): T[] {
+  if (pool.length <= count) return shuffle(pool);
+
+  const scopeCounts = new Map(scopePlan.map((item) => [item.id, item.count]));
+  const grouped = new Map<string, T[]>();
+  const unassigned: T[] = [];
+
+  for (const item of pool) {
+    if (item.scopeItemId && scopeCounts.has(item.scopeItemId)) {
+      const list = grouped.get(item.scopeItemId) || [];
+      list.push(item);
+      grouped.set(item.scopeItemId, list);
+    } else {
+      const matchedTag = (item.subtopicTags || []).find((tag) => scopeCounts.has(tag));
+      if (matchedTag) {
+        const list = grouped.get(matchedTag) || [];
+        list.push(item);
+        grouped.set(matchedTag, list);
+      } else {
+        unassigned.push(item);
+      }
+    }
+  }
+
+  for (const [key] of grouped) {
+    grouped.set(key, shuffle(grouped.get(key)!));
+  }
+  const shuffledUnassigned = shuffle(unassigned);
+
+  const selected: T[] = [];
+  const quota = new Map(scopePlan.map((item) => [item.id, item.count]));
+  const scopeOrder = shuffle(scopePlan.map((item) => item.id));
+
+  for (const scopeId of scopeOrder) {
+    const items = grouped.get(scopeId) || [];
+    const take = Math.min(quota.get(scopeId) || 0, items.length);
+    selected.push(...items.slice(0, take));
+  }
+
+  if (selected.length < count) {
+    const remaining = shuffledUnassigned.filter(
+      (item) => !selected.includes(item)
+    );
+    selected.push(...remaining.slice(0, count - selected.length));
+  }
+
+  return shuffle(selected.slice(0, count));
+}
+
 export function buildScopePlan(
   items: TopicScopeItem[],
   questionCount: number,
@@ -133,7 +195,7 @@ export function buildScopePlan(
         normalizedFilter.has(item.title.toLowerCase())
       )
     : items;
-  const pool = eligible.length > 0 ? eligible : items;
+  const pool = shuffle(eligible.length > 0 ? eligible : items);
   const counts = new Map<string, { id: string; title: string; count: number }>();
 
   for (let i = 0; i < questionCount; i++) {
@@ -184,6 +246,7 @@ export async function generateQuizForTopic(
     timerDurationSeconds?: number;
     mode?: "normal" | "retry" | "subtopic";
     subtopicFilter?: string[];
+    agent?: AiAgent;
   }
 ) {
   const [topic] = await db
@@ -232,10 +295,10 @@ export async function generateQuizForTopic(
         eq(materialQuestions.active, true)
       )
     );
-  const selectedMaterial = materialBank
+  const unattempted = materialBank
     .filter((question) => !attemptedMaterialIds.has(question.id))
-    .filter((question) => matchesSubtopicFilter(question, options?.subtopicFilter))
-    .slice(0, questionCount);
+    .filter((question) => matchesSubtopicFilter(question, options?.subtopicFilter));
+  const selectedMaterial = stratifiedSample(unattempted, questionCount, scopePlan);
   const aiCount = Math.max(0, questionCount - selectedMaterial.length);
   const materialContext = await getActiveMaterialContext(topicId);
   const generated = aiCount > 0 ? await generateQuestions({
@@ -247,6 +310,7 @@ export async function generateQuizForTopic(
     instructions: materials.instructions,
     scopeContext: [buildScopeContext(scope, materials), materialContext].filter(Boolean).join("\n\nImported material context:\n"),
     scopePlan,
+    agent: options?.agent,
   }) : [];
 
   // TODO: implement fact-check context injection before question generation
@@ -522,7 +586,8 @@ export async function flagQuestion(
   questionId: string,
   reason: string,
   userId: string,
-  category?: string
+  category?: string,
+  agent: AiAgent = "glm"
 ) {
   const [session] = await db
     .select()
@@ -545,7 +610,7 @@ export async function flagQuestion(
     })
     .where(and(eq(questions.id, questionId), eq(questions.sessionId, sessionId)));
 
-  setTimeout(() => verifyFlaggedQuestion(questionId).catch(() => undefined), 0);
+  setTimeout(() => verifyFlaggedQuestion(questionId, agent).catch(() => undefined), 0);
 }
 
 export async function getQuizHistory(

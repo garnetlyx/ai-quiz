@@ -4,13 +4,15 @@ import {
   materialImportJobs,
   materialQuestions,
   materialTextChunks,
+  quizSessions,
   questions,
   topics,
   topicUpdateSuggestions,
+  users,
 } from "../db/schema.js";
 import { eq, and, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { interpretTopic, detectFormat, generateScope } from "../services/ai.js";
+import { interpretTopic, detectFormat, generateScope, isValidAgent, type AiAgent } from "../services/ai.js";
 import { searchWeb } from "../services/search.js";
 import {
   DEFAULT_MATERIALS,
@@ -21,7 +23,7 @@ import {
   normalizeMaterials,
   normalizeScope,
 } from "../services/scope.js";
-import { createMaterialImportJob, refreshMaterialImportSummary } from "../services/materialImport.js";
+import { createMaterialImportJob, processPastedContent, refreshMaterialImportSummary } from "../services/materialImport.js";
 import {
   idAndJobIdParamsSchema,
   idAndQuestionIdParamsSchema,
@@ -101,7 +103,10 @@ export async function topicRoutes(app: FastifyInstance) {
     const { description } = parsed.data;
     const userId = (request.user as { userId: string }).userId;
 
-    const interpretation = await interpretTopic(description);
+    const [user] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
+    const agent: AiAgent = user?.aiAgent && isValidAgent(user.aiAgent) ? user.aiAgent : "glm";
+
+    const interpretation = await interpretTopic(description, agent);
 
     if (interpretation.needsClarification) {
       return reply.send({
@@ -111,11 +116,12 @@ export async function topicRoutes(app: FastifyInstance) {
       });
     }
 
-    const format = await detectFormat(description);
+    const format = await detectFormat(description, agent);
     let scope = defaultScope(description);
     try {
       const generatedScope = await generateScope(
-        interpretation.interpretation?.description ?? description
+        interpretation.interpretation?.description ?? description,
+        agent
       );
       scope = normalizeScope(generatedScope);
       assertScopeIsUsable(scope);
@@ -152,6 +158,9 @@ export async function topicRoutes(app: FastifyInstance) {
 
     const { confirmed, feedback } = parsed.data;
     const userId = (request.user as { userId: string }).userId;
+
+    const [userRow] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
+    const confirmAgent: AiAgent = userRow?.aiAgent && isValidAgent(userRow.aiAgent) ? userRow.aiAgent : "glm";
 
     const [topic] = await db
       .select()
@@ -195,7 +204,8 @@ export async function topicRoutes(app: FastifyInstance) {
         : undefined;
 
     const refinedFormat = await detectFormat(
-      `${topic.description}\n\nUser feedback: ${feedback}${searchContext ? `\n\nAdditional context from web search:\n${searchContext}` : ""}`
+      `${topic.description}\n\nUser feedback: ${feedback}${searchContext ? `\n\nAdditional context from web search:\n${searchContext}` : ""}`,
+      confirmAgent
     );
 
     await db
@@ -488,6 +498,84 @@ export async function topicRoutes(app: FastifyInstance) {
     if (!updated) return reply.status(404).send({ message: "Topic not found" });
 
     return reply.send(serializeTopic(updated));
+  });
+
+  const resetSchema = z.object({ scope: z.enum(["history", "questions", "all"]) });
+
+  app.delete("/api/topics/:id/reset", async (request, reply) => {
+    const { id } = idParamsSchema.parse(request.params);
+    const parsed = resetSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ message: "Invalid scope" });
+
+    const userId = (request.user as { userId: string }).userId;
+    const [topic] = await db
+      .select()
+      .from(topics)
+      .where(and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt)))
+      .limit(1);
+    if (!topic) return reply.status(404).send({ message: "Topic not found" });
+
+    const scope = parsed.data.scope;
+    let deletedSessions = 0;
+    let deletedMaterialQuestions = 0;
+
+    if (scope === "history" || scope === "all") {
+      const deleted = await db
+        .delete(quizSessions)
+        .where(eq(quizSessions.topicId, id))
+        .returning({ id: quizSessions.id });
+      deletedSessions = deleted.length;
+    }
+
+    if (scope === "questions" || scope === "all") {
+      const deletedQ = await db
+        .delete(materialQuestions)
+        .where(eq(materialQuestions.topicId, id))
+        .returning({ id: materialQuestions.id });
+      deletedMaterialQuestions = deletedQ.length;
+      await db.delete(materialTextChunks).where(eq(materialTextChunks.topicId, id));
+      await db.delete(topicUpdateSuggestions).where(eq(topicUpdateSuggestions.topicId, id));
+      await db.delete(materialImportJobs).where(eq(materialImportJobs.topicId, id));
+    }
+
+    return reply.send({ message: "Topic data reset", deletedSessions, deletedMaterialQuestions });
+  });
+
+  app.post("/api/topics/:id/paste-import", async (request, reply) => {
+    const { id } = idParamsSchema.parse(request.params);
+    const userId = (request.user as { userId: string }).userId;
+
+    const [topic] = await db
+      .select()
+      .from(topics)
+      .where(and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt)))
+      .limit(1);
+    if (!topic) return reply.status(404).send({ message: "Topic not found" });
+
+    let textValue = "";
+    const files: { fileName: string; mimeType: string; content: Buffer }[] = [];
+
+    for await (const part of request.parts()) {
+      if (part.type === "field" && part.fieldname === "text") {
+        textValue = part.value as string;
+      } else if (part.type === "file") {
+        const buffer = await part.toBuffer();
+        files.push({ fileName: part.filename, mimeType: part.mimetype, content: buffer });
+      }
+    }
+
+    if (!textValue.trim() && files.length === 0) {
+      return reply.status(400).send({ message: "Provide text or files to import" });
+    }
+
+    const result = await processPastedContent({
+      topicId: id,
+      userId,
+      text: textValue,
+      files: files.length > 0 ? files : undefined,
+    });
+
+    return reply.send(result);
   });
 
   app.delete("/api/topics/:id", async (request, reply) => {

@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { users } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { isValidAgent, AI_AGENT_OPTIONS, type AiAgent } from "../services/ai.js";
 
 const registerSchema = z.object({
   email: z.string().email(),
@@ -14,6 +15,8 @@ const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
+
+const aiAgentSchema = z.object({ agent: z.enum(["glm", "deepseek", "qwen"]) });
 
 export async function authRoutes(app: FastifyInstance) {
   app.post(
@@ -91,9 +94,30 @@ export async function authRoutes(app: FastifyInstance) {
 
       const token = app.jwt.sign({ userId: user.id });
       return reply.send({
-        user: { id: user.id, email: user.email },
+        user: { id: user.id, email: user.email, aiAgent: user.aiAgent },
         token,
       });
     },
   );
+
+  app.get("/api/auth/ai-agent", async (request, reply) => {
+    await (app as any).authenticate(request);
+    const userId = (request.user as { userId: string }).userId;
+    const [row] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!row) return reply.status(404).send({ message: "User not found" });
+    return reply.send({
+      agent: row.aiAgent && isValidAgent(row.aiAgent) ? row.aiAgent : "glm",
+      options: AI_AGENT_OPTIONS,
+    });
+  });
+
+  app.put("/api/auth/ai-agent", async (request, reply) => {
+    await (app as any).authenticate(request);
+    const parsed = aiAgentSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ message: "Invalid agent" });
+
+    const userId = (request.user as { userId: string }).userId;
+    await db.update(users).set({ aiAgent: parsed.data.agent }).where(eq(users.id, userId));
+    return reply.send({ agent: parsed.data.agent });
+  });
 }

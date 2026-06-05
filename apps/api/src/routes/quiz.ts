@@ -1,11 +1,15 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { db } from "../db/index.js";
+import { users } from "../db/schema.js";
+import { eq } from "drizzle-orm";
 import {
   generateQuizForTopic,
   submitQuizAnswers,
   getQuizResults,
   flagQuestion,
 } from "../services/quiz.js";
+import { isValidAgent, type AiAgent } from "../services/ai.js";
 import {
   sessionAndQuestionIdParamsSchema,
   sessionIdParamsSchema,
@@ -43,6 +47,9 @@ export async function quizRoutes(app: FastifyInstance) {
 
     const userId = (request.user as { userId: string }).userId;
 
+    const [user] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
+    const agent: AiAgent = user?.aiAgent && isValidAgent(user.aiAgent) ? user.aiAgent : "glm";
+
     try {
       const result = await generateQuizForTopic(
         topicId,
@@ -53,6 +60,7 @@ export async function quizRoutes(app: FastifyInstance) {
           timerDurationSeconds: parsed.data.timerDuration,
           mode: parsed.data.mode,
           subtopicFilter: parsed.data.subtopicFilter,
+          agent,
         }
       );
 

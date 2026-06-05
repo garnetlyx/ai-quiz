@@ -5,9 +5,9 @@ import {
   Pressable,
   ActivityIndicator,
   FlatList,
+  ScrollView,
   StyleSheet,
   TextInput,
-  ScrollView,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useTopicStore } from "@/stores/topic";
@@ -34,7 +34,7 @@ export default function TopicDetailScreen() {
   const updateTopic = useTopicStore((s) => s.updateTopic);
   const confirmFormat = useTopicStore((s) => s.confirmFormat);
   const isLoading = useTopicStore((s) => s.isLoading);
-  const [activeTab, setActiveTab] = useState<"quiz" | "materials" | "scope" | "history" | "missed" | "subtopics">("quiz");
+  const [activeTab, setActiveTab] = useState<"quiz" | "import" | "reset" | "materials" | "scope" | "history" | "missed" | "subtopics">("quiz");
   const [history, setHistory] = useState<QuizHistoryEntry[]>([]);
   const [weakSubtopics, setWeakSubtopics] = useState<WeakSubtopic[]>([]);
   const [selectedSubtopics, setSelectedSubtopics] = useState<Set<string>>(new Set());
@@ -50,6 +50,14 @@ export default function TopicDetailScreen() {
   const [materialError, setMaterialError] = useState("");
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [questionDrafts, setQuestionDrafts] = useState<Record<string, MaterialQuestionUpdateRequest>>({});
+  const [resetScope, setResetScope] = useState<"history" | "questions" | "all">("history");
+  const [resetConfirmVisible, setResetConfirmVisible] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetResult, setResetResult] = useState<string | null>(null);
+  const [importText, setImportText] = useState("");
+  const [importFiles, setImportFiles] = useState<File[]>([]);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) fetchTopic(id);
@@ -473,7 +481,7 @@ export default function TopicDetailScreen() {
       </View>
 
       <View style={styles.tabs}>
-        {(["quiz", "materials", "scope", "history", "missed", "subtopics"] as const).map((tab) => (
+        {(["quiz", "import", "reset", "materials", "scope", "history", "missed", "subtopics"] as const).map((tab) => (
           <Pressable
             key={tab}
             style={[styles.tab, activeTab === tab && styles.tabActive]}
@@ -487,7 +495,7 @@ export default function TopicDetailScreen() {
       </View>
 
       {activeTab === "quiz" && (
-        <View style={styles.tabContent}>
+        <ScrollView style={styles.tabContent}>
           <Text style={styles.scopeMeta}>
             {activeScopeCount} active topics
             {frozenScopeCount > 0 ? ` · ${frozenScopeCount} frozen` : ""}
@@ -498,11 +506,161 @@ export default function TopicDetailScreen() {
           >
             <Text style={styles.actionButtonText}>Start New Quiz</Text>
           </Pressable>
-        </View>
+        </ScrollView>
+      )}
+
+      {activeTab === "import" && (
+        <ScrollView style={styles.tabContent}>
+          <Text style={styles.sectionTitle}>Paste Questions or Knowledge</Text>
+          <TextInput
+            style={[styles.input, styles.importTextarea]}
+            multiline
+            placeholder="Paste questions, answers, or study material here..."
+            value={importText}
+            onChangeText={setImportText}
+            placeholderTextColor="#999"
+          />
+
+          <Pressable
+            style={[styles.actionButton, styles.neutralButton]}
+            onPress={() => {
+              if (typeof document === "undefined") return;
+              const input = document.createElement("input");
+              input.type = "file";
+              input.multiple = true;
+              input.accept = ".pdf,.txt,.md,.markdown,image/png,image/jpeg,image/webp,image/tiff";
+              input.onchange = () => {
+                const selected = Array.from(input.files || []);
+                if (selected.length > 0) setImportFiles((prev) => [...prev, ...selected]);
+              };
+              input.click();
+            }}
+          >
+            <Text style={styles.actionButtonText}>Attach Files (PDF, Images, Text)</Text>
+          </Pressable>
+
+          {importFiles.length > 0 && (
+            <View style={styles.materialCard}>
+              {importFiles.map((file, index) => (
+                <View key={file.name + index} style={styles.rowButtons}>
+                  <Text style={styles.historyMeta}>{file.name}</Text>
+                  <Pressable onPress={() => setImportFiles((prev) => prev.filter((_, i) => i !== index))}>
+                    <Text style={styles.error}>✕</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {importResult && <Text style={styles.historyMeta}>{importResult}</Text>}
+
+          <Pressable
+            style={[styles.actionButton, styles.confirmButton, (importLoading || (!importText.trim() && importFiles.length === 0)) && styles.disabled]}
+            disabled={importLoading || (!importText.trim() && importFiles.length === 0)}
+            onPress={async () => {
+              if (!id) return;
+              setImportLoading(true);
+              setImportResult(null);
+              try {
+                const form = new FormData();
+                if (importText.trim()) form.append("text", importText);
+                importFiles.forEach((file) => form.append("files", file));
+                const result = await api.request<{ jobId: string; questionCount: number; error?: string }>(
+                  `/api/topics/${id}/paste-import`,
+                  { method: "POST", body: form }
+                );
+                if (result.error) {
+                  setImportResult(`Import failed: ${result.error}`);
+                } else {
+                  setImportResult(`Imported ${result.questionCount} question${result.questionCount !== 1 ? "s" : ""}`);
+                  setImportText("");
+                  setImportFiles([]);
+                }
+              } catch (err) {
+                setImportResult(`Error: ${err instanceof Error ? err.message : "Import failed"}`);
+              } finally {
+                setImportLoading(false);
+              }
+            }}
+          >
+            <Text style={styles.actionButtonText}>{importLoading ? "Processing..." : "Submit"}</Text>
+          </Pressable>
+        </ScrollView>
+      )}
+
+      {activeTab === "reset" && (
+        <ScrollView style={styles.tabContent}>
+          <Text style={styles.resetWarning}>Reset will permanently delete data. This cannot be undone.</Text>
+
+          {(["history", "questions", "all"] as const).map((scope) => (
+            <Pressable
+              key={scope}
+              style={[styles.resetOption, resetScope === scope && styles.resetOptionSelected]}
+              onPress={() => setResetScope(scope)}
+            >
+              <Text style={[styles.historyMeta, resetScope === scope && { fontWeight: "bold" }]}>
+                {scope === "history" ? "Quiz history only (sessions, scores, flags, missed)" :
+                 scope === "questions" ? "Question bank only (imported material questions)" :
+                 "Everything (all quiz data + question bank)"}
+              </Text>
+            </Pressable>
+          ))}
+
+          {resetConfirmVisible && (
+            <View style={styles.materialCard}>
+              <Text style={styles.error}>
+                Are you sure? This will permanently delete{" "}
+                {resetScope === "history" ? "all quiz sessions, scores, and flags" :
+                 resetScope === "questions" ? "all imported material questions" :
+                 "all quiz data and the question bank"}.
+              </Text>
+              <View style={styles.rowButtons}>
+                <Pressable
+                  style={[styles.actionButton, styles.confirmButton]}
+                  onPress={async () => {
+                    if (!id) return;
+                    setResetLoading(true);
+                    setResetResult(null);
+                    try {
+                      const result = await api.request<{ deletedSessions: number; deletedMaterialQuestions: number }>(
+                        `/api/topics/${id}/reset`,
+                        { method: "DELETE", body: { scope: resetScope } }
+                      );
+                      setResetResult(`Deleted ${result.deletedSessions} sessions, ${result.deletedMaterialQuestions} material questions`);
+                      setResetConfirmVisible(false);
+                    } catch (err) {
+                      setResetResult(`Error: ${err instanceof Error ? err.message : "Reset failed"}`);
+                      setResetConfirmVisible(false);
+                    } finally {
+                      setResetLoading(false);
+                    }
+                  }}
+                >
+                  <Text style={styles.actionButtonText}>{resetLoading ? "Resetting..." : "Confirm Delete"}</Text>
+                </Pressable>
+                <Pressable style={[styles.actionButton, styles.neutralButton]} onPress={() => setResetConfirmVisible(false)}>
+                  <Text style={styles.actionButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
+          {resetResult && <Text style={styles.historyMeta}>{resetResult}</Text>}
+
+          {!resetConfirmVisible && (
+            <Pressable
+              style={[styles.actionButton, styles.rejectButton, resetLoading && styles.disabled]}
+              disabled={resetLoading}
+              onPress={() => setResetConfirmVisible(true)}
+            >
+              <Text style={styles.actionButtonText}>Reset</Text>
+            </Pressable>
+          )}
+        </ScrollView>
       )}
 
       {activeTab === "scope" && (
-        <View style={styles.tabContent}>
+        <ScrollView style={styles.tabContent}>
           <TopicEditor
             topic={currentTopic}
             onSave={async (data) => {
@@ -510,7 +668,7 @@ export default function TopicDetailScreen() {
               await updateTopic(id, data);
             }}
           />
-        </View>
+        </ScrollView>
       )}
 
       {activeTab === "materials" && (
@@ -625,7 +783,7 @@ export default function TopicDetailScreen() {
       )}
 
       {activeTab === "missed" && (
-        <View style={styles.tabContent}>
+        <ScrollView style={styles.tabContent}>
           <Text style={styles.missedCount}>{missedCount} missed questions</Text>
           {missedCount > 0 && (
             <Pressable
@@ -635,51 +793,52 @@ export default function TopicDetailScreen() {
               <Text style={styles.actionButtonText}>Retry Missed Questions</Text>
             </Pressable>
           )}
-        </View>
+        </ScrollView>
       )}
 
       {activeTab === "subtopics" && (
-        <View style={styles.tabContent}>
-          {weakSubtopics.length > 0 && selectedSubtopics.size > 0 && (
+        <FlatList
+          style={styles.tabContent}
+          data={weakSubtopics}
+          keyExtractor={(item) => item.subtopic}
+          ListHeaderComponent={
+            weakSubtopics.length > 0 && selectedSubtopics.size > 0 ? (
+              <Pressable
+                style={styles.actionButton}
+                onPress={() => router.push(
+                  `/(app)/quiz/setup?topicId=${id}&mode=subtopic&subtopics=${encodeURIComponent(JSON.stringify([...selectedSubtopics]))}`
+                )}
+              >
+                <Text style={styles.actionButtonText}>
+                  Practice Selected ({selectedSubtopics.size})
+                </Text>
+              </Pressable>
+            ) : null
+          }
+          renderItem={({ item }) => (
             <Pressable
-              style={styles.actionButton}
-              onPress={() => router.push(
-                `/(app)/quiz/setup?topicId=${id}&mode=subtopic&subtopics=${encodeURIComponent(JSON.stringify([...selectedSubtopics]))}`
-              )}
+              style={[
+                styles.subtopicItem,
+                selectedSubtopics.has(item.subtopic) && styles.subtopicItemSelected,
+              ]}
+              onPress={() => {
+                setSelectedSubtopics((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(item.subtopic)) next.delete(item.subtopic);
+                  else next.add(item.subtopic);
+                  return next;
+                });
+              }}
             >
-              <Text style={styles.actionButtonText}>
-                Practice Selected ({selectedSubtopics.size})
+              <Text style={styles.subtopicName}>{item.subtopic}</Text>
+              <Text style={styles.subtopicRate}>
+                {item.missRate}% miss rate ({item.missCount}/{item.totalQuestions})
               </Text>
             </Pressable>
           )}
-          <FlatList
-            data={weakSubtopics}
-            keyExtractor={(item) => item.subtopic}
-            renderItem={({ item }) => (
-              <Pressable
-                style={[
-                  styles.subtopicItem,
-                  selectedSubtopics.has(item.subtopic) && styles.subtopicItemSelected,
-                ]}
-                onPress={() => {
-                  setSelectedSubtopics((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(item.subtopic)) next.delete(item.subtopic);
-                    else next.add(item.subtopic);
-                    return next;
-                  });
-                }}
-              >
-                <Text style={styles.subtopicName}>{item.subtopic}</Text>
-                <Text style={styles.subtopicRate}>
-                  {item.missRate}% miss rate ({item.missCount}/{item.totalQuestions})
-                </Text>
-              </Pressable>
-            )}
-            ListEmptyComponent={<Text style={styles.emptyText}>No weak subtopics identified yet</Text>}
-            contentContainerStyle={styles.listContent}
-          />
-        </View>
+          ListEmptyComponent={<Text style={styles.emptyText}>No weak subtopics identified yet</Text>}
+          contentContainerStyle={styles.listContent}
+        />
       )}
     </View>
   );
@@ -740,4 +899,8 @@ const styles = StyleSheet.create({
   answerChoice: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: "#cbd5e1", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
   answerChoiceSelected: { backgroundColor: "#16a34a", borderColor: "#16a34a" },
   answerChoiceText: { fontSize: 14, fontWeight: "700", color: "#334155" },
+  resetWarning: { color: "#b45309", fontSize: 14, fontWeight: "600", marginBottom: 12, backgroundColor: "#fef3c7", padding: 12, borderRadius: 8 },
+  resetOption: { backgroundColor: "#fff", padding: 16, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: "#e5e7eb" },
+  resetOptionSelected: { borderColor: "#2563eb", backgroundColor: "#eff6ff" },
+  importTextarea: { minHeight: 200, textAlignVertical: "top" },
 });

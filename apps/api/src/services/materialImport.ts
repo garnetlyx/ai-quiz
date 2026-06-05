@@ -471,6 +471,175 @@ export function startMaterialImportWorker() {
   }
 }
 
+export async function processPastedContent(params: {
+  topicId: string;
+  userId: string;
+  text: string;
+  files?: { fileName: string; mimeType: string; content: Buffer }[];
+}): Promise<{ jobId: string; questionCount: number; error?: string }> {
+  const [topic] = await db
+    .select()
+    .from(topics)
+    .where(and(eq(topics.id, params.topicId), eq(topics.userId, params.userId), isNull(topics.archivedAt)))
+    .limit(1);
+  if (!topic) throw new Error("Topic not found");
+
+  const [job] = await db
+    .insert(materialImportJobs)
+    .values({
+      topicId: params.topicId,
+      userId: params.userId,
+      fileName: "paste-import",
+      filePath: "",
+      mimeType: "text/plain",
+      status: "processing",
+      progress: 10,
+      summary: {},
+    })
+    .returning();
+
+  try {
+    const extractedTexts: string[] = [];
+
+    if (params.files && params.files.length > 0) {
+      const dir = path.join(uploadRoot(), params.userId, params.topicId);
+      await mkdir(dir, { recursive: true });
+
+      for (const file of params.files) {
+        try {
+          const safeName = file.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const filePath = path.join(dir, `${randomUUID()}-${safeName}`);
+          await writeFile(filePath, file.content);
+          const text = await extractTextFromFile(filePath, file.mimeType, file.fileName);
+          if (text.trim()) extractedTexts.push(text);
+        } catch {
+          /* skip failed file */
+        }
+      }
+    }
+
+    if (params.text.trim()) extractedTexts.unshift(params.text);
+    const combinedText = extractedTexts.join("\n\n");
+
+    if (!combinedText.trim()) {
+      await db.update(materialImportJobs).set({
+        status: "failed",
+        error: "No text content provided",
+        updatedAt: new Date(),
+        completedAt: new Date(),
+      }).where(eq(materialImportJobs.id, job.id));
+      return { jobId: job.id, questionCount: 0, error: "No text content provided" };
+    }
+
+    await db.update(materialImportJobs).set({ progress: 40, updatedAt: new Date() }).where(eq(materialImportJobs.id, job.id));
+
+    const scope = normalizeScope(topic.scope);
+    const extraction = await extractMaterialQuestions({
+      filePath: "paste-import",
+      text: combinedText,
+      verifier: process.env.MATERIAL_IMPORT_AI_VERIFY === "false" ? null : buildMaterialQuestionVerifier(),
+      aiSectionLimit: 0,
+    });
+
+    const paragraphs = splitParagraphs(combinedText);
+    const questionLineRanges = extraction.questions.map((question) => [
+      question.sourceLocation.lineStart,
+      question.sourceLocation.lineEnd,
+    ]);
+    const helpfulChunks = paragraphs
+      .filter((paragraph) =>
+        !questionLineRanges.some(([start, end]) =>
+          rangesOverlap(paragraph.lineStart, paragraph.lineEnd, start, end)
+        )
+      )
+      .slice(0, 80)
+      .map(({ content }) => classifyHelpfulChunk(content));
+
+    await db.update(materialImportJobs).set({ progress: 65, updatedAt: new Date() }).where(eq(materialImportJobs.id, job.id));
+
+    for (const question of extraction.questions) {
+      await persistQuestion(job.id, params.topicId, question, scope);
+    }
+
+    for (const chunk of helpfulChunks) {
+      await db.insert(materialTextChunks).values({
+        topicId: params.topicId,
+        jobId: job.id,
+        kind: chunk.kind,
+        content: chunk.content.slice(0, 8000),
+        labels: chunk.labels,
+        confidence: chunk.confidence,
+        active: true,
+      });
+    }
+
+    const structureChunks = helpfulChunks.filter((chunk) => chunk.kind === "structure");
+    const definitionChunks = helpfulChunks.filter((chunk) => chunk.kind === "definition");
+    if (structureChunks.length > 0) {
+      await db.insert(topicUpdateSuggestions).values({
+        topicId: params.topicId,
+        jobId: job.id,
+        type: "scope",
+        payload: buildScopeSuggestion(structureChunks),
+      });
+    }
+    if (definitionChunks.length > 0) {
+      await db.insert(topicUpdateSuggestions).values({
+        topicId: params.topicId,
+        jobId: job.id,
+        type: "definition",
+        payload: buildDefinitionSuggestion(definitionChunks),
+      });
+    }
+
+    const summary = {
+      questionCount: extraction.questions.length,
+      readyCount: extraction.questions.filter((question) => question.reviewStatus === "ready").length,
+      autoRepairedCount: extraction.questions.filter((question) => question.reviewStatus === "auto_repaired").length,
+      needsRepairCount: extraction.questions.filter((question) => question.reviewStatus === "needs_repair").length,
+      needsUserReviewCount: extraction.questions.filter((question) => question.reviewStatus === "needs_user_review").length,
+      unresolvedCount: extraction.questions.filter((question) => question.reviewStatus === "unresolved").length,
+      manualReviewRate: extraction.report.manualReviewRate,
+      repairDebtRate: extraction.report.repairDebtRate,
+      contextCount: helpfulChunks.filter((chunk) => chunk.kind === "context").length,
+      structureCount: structureChunks.length,
+      definitionCount: definitionChunks.length,
+    };
+
+    const materials = normalizeMaterials(topic.materials);
+    const contextText = helpfulChunks
+      .filter((chunk) => chunk.kind === "context")
+      .map((chunk) => chunk.content)
+      .join("\n\n")
+      .slice(0, 3500);
+    if (contextText) {
+      const updatedMaterials: TopicMaterials = {
+        ...materials,
+        notes: [materials.notes, contextText].filter(Boolean).join("\n\n").slice(0, 4000),
+      };
+      await db.update(topics).set({ materials: updatedMaterials }).where(eq(topics.id, params.topicId));
+    }
+
+    await db.update(materialImportJobs).set({
+      status: "completed",
+      progress: 100,
+      summary,
+      updatedAt: new Date(),
+      completedAt: new Date(),
+    }).where(eq(materialImportJobs.id, job.id));
+
+    return { jobId: job.id, questionCount: extraction.questions.length };
+  } catch (error) {
+    await db.update(materialImportJobs).set({
+      status: "failed",
+      error: error instanceof Error ? error.message : "Import failed",
+      updatedAt: new Date(),
+      completedAt: new Date(),
+    }).where(eq(materialImportJobs.id, job.id));
+    return { jobId: job.id, questionCount: 0, error: error instanceof Error ? error.message : "Import failed" };
+  }
+}
+
 export async function closeMaterialImportWorker() {
   await worker?.close();
   await queue?.close();
