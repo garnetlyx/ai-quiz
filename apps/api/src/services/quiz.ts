@@ -366,7 +366,8 @@ export async function generateQuizForTopic(
       materials,
       scope,
       scopePlan,
-    ).catch(() => {
+    ).catch((err) => {
+      console.error(`[generateAiQuestions] Failed for session ${session.id}:`, err instanceof Error ? err.message : err);
       db.update(quizSessions)
         .set({ questionCount: selectedMaterial.length })
         .where(eq(quizSessions.id, session.id))

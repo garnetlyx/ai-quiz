@@ -147,6 +147,21 @@ export default function QuizFlowScreen() {
         </View>
       );
     }
+    if (questions.length === 0 && !isGenerating) {
+      return (
+        <View style={styles.centered}>
+          <Text style={styles.errorTitle}>No questions available</Text>
+          <Text style={styles.errorSub}>
+            {totalCount === 0
+              ? "Question generation failed. Please try again."
+              : "Still loading..."}
+          </Text>
+          <Pressable style={styles.errorButton} onPress={() => router.replace("/(app)/dashboard")}>
+            <Text style={styles.errorButtonText}>Back to Dashboard</Text>
+          </Pressable>
+        </View>
+      );
+    }
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" />
@@ -315,6 +330,10 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 12, color: "#666", fontSize: 14 },
   generatingTitle: { marginTop: 16, color: "#2563eb", fontSize: 18, fontWeight: "600" },
   generatingSub: { marginTop: 8, color: "#666", fontSize: 14 },
+  errorTitle: { fontSize: 18, fontWeight: "600", color: "#dc2626", marginBottom: 8 },
+  errorSub: { fontSize: 14, color: "#666", marginBottom: 24 },
+  errorButton: { backgroundColor: "#2563eb", paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
+  errorButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   timerBar: { backgroundColor: "#dc2626", padding: 8, alignItems: "center" },
   timerText: { color: "#fff", fontSize: 18, fontWeight: "700" },
   progressContainer: { padding: 16, backgroundColor: "#fff" },
