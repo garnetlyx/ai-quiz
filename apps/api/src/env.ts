@@ -3,6 +3,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
+export const nativeFetch = globalThis.fetch;
+
 function findEnvFile(startDir: string): string | null {
   let current = startDir;
 

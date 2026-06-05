@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
+import { nativeFetch } from "../env.js";
 import { buildTopicInterpretMessages } from "../prompts/topic-interpret.js";
 import { buildFormatDetectMessages } from "../prompts/format-detect.js";
 import { buildQuestionGenerateMessages } from "../prompts/question-generate.js";
@@ -80,9 +81,26 @@ export function getClient(): OpenAI {
     _client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY || "dummy",
       baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+      fetch: nativeFetch as typeof globalThis.fetch,
     });
   }
   return _client;
+}
+
+async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 3000): Promise<T> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      const isConnectionError = e?.error?.type === "APIConnectionError" ||
+        e?.message?.includes("Connection error") ||
+        e?.message?.includes("EHOSTUNREACH");
+      if (!isConnectionError || attempt === retries) throw e;
+      console.warn(`[AI] Connection error, retrying (${retries - attempt} left): ${e.message?.substring(0, 100)}`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw new Error("unreachable");
 }
 
 interface TopicInterpretResult {
@@ -200,12 +218,12 @@ export async function interpretTopic(
   agent: AiAgent = "glm"
 ): Promise<TopicInterpretResult> {
   const messages = buildTopicInterpretMessages(userInput);
-  const response = await getClient().chat.completions.create({
+  const response = await withRetry(() => getClient().chat.completions.create({
     model: resolveModel(agent),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.3,
-  });
+  }));
 
   const parsed = parseJsonObject(getMessageContent(response));
   return validateAiResponse(
@@ -220,12 +238,12 @@ export async function detectFormat(
   agent: AiAgent = "glm"
 ): Promise<ExamFormatResult> {
   const messages = buildFormatDetectMessages(topicDescription);
-  const response = await getClient().chat.completions.create({
+  const response = await withRetry(() => getClient().chat.completions.create({
     model: resolveModel(agent),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.2,
-  });
+  }));
 
   const parsed = parseJsonObject(getMessageContent(response));
   return validateAiResponse(examFormatResultSchema, parsed, "format detection");
@@ -238,12 +256,12 @@ export async function generateScope(
   chapters: { title: string; items: { title: string; details?: string }[] }[];
 }> {
   const messages = buildScopeGenerateMessages(topicDescription);
-  const response = await getClient().chat.completions.create({
+  const response = await withRetry(() => getClient().chat.completions.create({
     model: resolveModel(agent),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.3,
-  });
+  }));
 
   const parsed = parseJsonObject(getMessageContent(response));
   return validateAiResponse(scopeGenerateResultSchema, parsed, "scope generation");
@@ -261,12 +279,12 @@ export async function generateQuestions(params: {
   agent?: AiAgent;
 }): Promise<GeneratedQuestion[]> {
   const messages = buildQuestionGenerateMessages(params);
-  const response = await getClient().chat.completions.create({
+  const response = await withRetry(() => getClient().chat.completions.create({
     model: resolveModel(params.agent || "glm"),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.7,
-  });
+  }));
 
   const parsed = parseJsonObject(getMessageContent(response));
   const validated = validateAiResponse(
