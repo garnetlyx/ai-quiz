@@ -136,6 +136,17 @@ export default function QuizFlowScreen() {
   };
 
   if (!currentQuestion) {
+    if (isGenerating || (questions.length === 0 && totalCount > 0)) {
+      return (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#2563eb" />
+          <Text style={styles.generatingTitle}>Generating questions...</Text>
+          <Text style={styles.generatingSub}>
+            {pendingCount > 0 ? `${pendingCount} question${pendingCount !== 1 ? "s" : ""} remaining` : "Almost done"}
+          </Text>
+        </View>
+      );
+    }
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" />
@@ -302,6 +313,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f5f5f5" },
   centered: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 12, color: "#666", fontSize: 14 },
+  generatingTitle: { marginTop: 16, color: "#2563eb", fontSize: 18, fontWeight: "600" },
+  generatingSub: { marginTop: 8, color: "#666", fontSize: 14 },
   timerBar: { backgroundColor: "#dc2626", padding: 8, alignItems: "center" },
   timerText: { color: "#fff", fontSize: 18, fontWeight: "700" },
   progressContainer: { padding: 16, backgroundColor: "#fff" },
