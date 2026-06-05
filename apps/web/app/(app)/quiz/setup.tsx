@@ -21,7 +21,15 @@ export default function QuizSetupScreen() {
   const startQuiz = useQuizStore((s) => s.startQuiz);
   const startRetry = useQuizStore((s) => s.startRetry);
 
-  const parsedSubtopics = subtopics ? JSON.parse(decodeURIComponent(subtopics)) : undefined;
+  const parsedSubtopics = (() => {
+    if (!subtopics) return undefined;
+    try {
+      const parsed = JSON.parse(decodeURIComponent(subtopics));
+      return Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const handleStart = async () => {
     setIsLoading(true);

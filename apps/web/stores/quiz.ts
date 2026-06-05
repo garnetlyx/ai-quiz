@@ -93,7 +93,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         ? current.filter((i) => i !== answerIndex)
         : [...current, answerIndex]
       : current.includes(answerIndex)
-        ? []
+        ? current
         : [answerIndex];
 
     set({

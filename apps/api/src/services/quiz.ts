@@ -1,21 +1,122 @@
 import { createHash } from "crypto";
 import { db } from "../db/index.js";
 import { materialQuestions, materialTextChunks, questions, quizSessions, topics } from "../db/schema.js";
-import { eq, and, desc, count, isNull, inArray } from "drizzle-orm";
-import { generateQuestions } from "./ai.js";
-import { factCheckQuestion } from "./search.js";
+import { eq, and, desc, count, isNull, isNotNull, inArray } from "drizzle-orm";
+import { generateQuestions, getClient, getModel, parseJsonObject, getMessageContent, validateAiResponse } from "./ai.js";
+import { searchWeb } from "./search.js";
+import { buildFlagVerifyMessages } from "../prompts/flag-verify.js";
 import {
   activeScopeItems,
   buildScopeContext,
+  defaultScope,
   normalizeMaterials,
   normalizeScope,
   scopeItemExists,
 } from "./scope.js";
-import type { ExamFormat, TopicScopeItem } from "@ai-quiz/shared";
+import type { ExamFormat, FlagVerificationResult, TopicScopeItem } from "@ai-quiz/shared";
+import { z } from "zod";
 
-function computeContentHash(text: string): string {
+export function computeContentHash(text: string): string {
   const normalized = text.toLowerCase().trim().replace(/[^\w\s]/g, "");
   return createHash("sha256").update(normalized).digest("hex");
+}
+
+const flagVerifyResultSchema = z.object({
+  verdict: z.enum(["upheld", "corrected"]),
+  reasoning: z.string(),
+  correctedAnswers: z.array(z.number().int()).optional(),
+  correctedExplanations: z.array(z.object({
+    optionId: z.string(),
+    isCorrect: z.boolean(),
+    explanation: z.string(),
+  })).optional(),
+  sources: z.array(z.object({
+    url: z.string(),
+    title: z.string(),
+    snippet: z.string(),
+  })).default([]),
+});
+
+export async function verifyFlaggedQuestion(questionId: string): Promise<void> {
+  const [question] = await db
+    .select()
+    .from(questions)
+    .where(eq(questions.id, questionId))
+    .limit(1);
+  if (!question || !question.isFlagged || question.flagStatus !== "pending_review") return;
+
+  try {
+    const searchResults = await searchWeb(question.content, 5);
+    const messages = buildFlagVerifyMessages({
+      questionContent: question.content,
+      options: question.options as { id: string; text: string }[],
+      correctAnswers: question.correctAnswers as number[],
+      explanations: question.explanations as { optionId: string; isCorrect: boolean; explanation: string }[],
+      flagReason: question.flagReason || "",
+      flagCategory: question.flagCategory || "wrong_answer",
+      searchResults,
+    });
+
+    const response = await getClient().chat.completions.create({
+      model: getModel(),
+      messages,
+      response_format: { type: "json_object" },
+      temperature: 0.2,
+    });
+
+    const parsed = parseJsonObject(getMessageContent(response));
+    const verified = validateAiResponse(flagVerifyResultSchema, parsed, "flag verification");
+
+    const verificationResult: FlagVerificationResult = {
+      verdict: verified.verdict,
+      reasoning: verified.reasoning,
+      sources: verified.sources,
+      ...(verified.verdict === "corrected" && verified.correctedAnswers
+        ? {
+            correctedAnswers: verified.correctedAnswers,
+            correctedExplanations: verified.correctedExplanations,
+          }
+        : {}),
+    };
+
+    const updates: Record<string, unknown> = {
+      flagStatus: verified.verdict,
+      flagVerificationResult: verificationResult,
+      flagVerifiedAt: new Date(),
+    };
+
+    if (verified.verdict === "corrected" && verified.correctedAnswers && verified.correctedAnswers.length > 0) {
+      updates.correctAnswers = verified.correctedAnswers;
+      if (verified.correctedExplanations) {
+        updates.explanations = verified.correctedExplanations;
+      }
+
+      // Cascade to material_questions source
+      if (question.materialQuestionId) {
+        const materialUpdates: Record<string, unknown> = {
+          correctAnswers: verified.correctedAnswers,
+          updatedAt: new Date(),
+        };
+        if (verified.correctedExplanations) {
+          materialUpdates.explanations = verified.correctedExplanations;
+        }
+        await db
+          .update(materialQuestions)
+          .set(materialUpdates)
+          .where(eq(materialQuestions.id, question.materialQuestionId));
+      }
+    }
+
+    await db
+      .update(questions)
+      .set(updates)
+      .where(eq(questions.id, questionId));
+  } catch {
+    await db
+      .update(questions)
+      .set({ flagStatus: "verification_failed", flagVerifiedAt: new Date() })
+      .where(eq(questions.id, questionId));
+  }
 }
 
 export function buildScopePlan(
@@ -94,10 +195,13 @@ export async function generateQuizForTopic(
   if (!topic) throw new Error("Topic not found");
   if (!topic.examFormat) throw new Error("Topic format not confirmed");
   const format = topic.examFormat as ExamFormat;
-  const scope = normalizeScope(topic.scope);
+  let scope = normalizeScope(topic.scope);
   const materials = normalizeMaterials(topic.materials);
-  const activeItems = activeScopeItems(scope);
-  if (activeItems.length === 0) throw new Error("Topic has no active scope items");
+  let activeItems = activeScopeItems(scope);
+  if (activeItems.length === 0) {
+    scope = defaultScope(topic.description || topic.title);
+    activeItems = activeScopeItems(scope);
+  }
   const scopePlan = buildScopePlan(
     activeItems,
     questionCount,
@@ -145,9 +249,7 @@ export async function generateQuizForTopic(
     scopePlan,
   }) : [];
 
-  for (const q of generated) {
-    await factCheckQuestion(q.content);
-  }
+  // TODO: implement fact-check context injection before question generation
 
   const [session] = await db
     .insert(quizSessions)
@@ -307,6 +409,13 @@ export async function getQuizResults(sessionId: string, userId: string) {
     .from(questions)
     .where(eq(questions.sessionId, sessionId));
 
+  const orphanedFlags = questionRows.filter(
+    (q) => q.isFlagged && q.flagStatus === "pending_review" && !q.flagVerifiedAt
+  );
+  for (const orphan of orphanedFlags) {
+    setTimeout(() => verifyFlaggedQuestion(orphan.id).catch(() => undefined), 0);
+  }
+
   return {
     session: session.quiz_sessions,
     questions: questionRows,
@@ -412,7 +521,8 @@ export async function flagQuestion(
   sessionId: string,
   questionId: string,
   reason: string,
-  userId: string
+  userId: string,
+  category?: string
 ) {
   const [session] = await db
     .select()
@@ -427,8 +537,15 @@ export async function flagQuestion(
 
   await db
     .update(questions)
-    .set({ isFlagged: true, flagReason: reason })
+    .set({
+      isFlagged: true,
+      flagReason: reason,
+      flagCategory: category || null,
+      flagStatus: "pending_review",
+    })
     .where(and(eq(questions.id, questionId), eq(questions.sessionId, sessionId)));
+
+  setTimeout(() => verifyFlaggedQuestion(questionId).catch(() => undefined), 0);
 }
 
 export async function getQuizHistory(
