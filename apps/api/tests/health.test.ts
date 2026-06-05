@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import "../src/env.js";
 import { build } from "../src/app.js";
 
 describe("Health endpoint", () => {
