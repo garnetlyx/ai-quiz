@@ -8,6 +8,7 @@ import { db } from "../db/index.js";
 import { questions, quizSessions, topics } from "../db/schema.js";
 import { and, eq, isNull } from "drizzle-orm";
 import type { ExamFormat } from "@ai-quiz/shared";
+import { topicIdParamsSchema } from "./validation.js";
 
 export async function historyRoutes(app: FastifyInstance) {
   app.addHook("preHandler", async (request) => {
@@ -15,7 +16,7 @@ export async function historyRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:topicId/missed", async (request, reply) => {
-    const { topicId } = request.params as { topicId: string };
+    const { topicId } = topicIdParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
 
     try {
@@ -29,7 +30,7 @@ export async function historyRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:topicId/weak-subtopics", async (request, reply) => {
-    const { topicId } = request.params as { topicId: string };
+    const { topicId } = topicIdParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
 
     try {
@@ -43,7 +44,7 @@ export async function historyRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:topicId/history", async (request, reply) => {
-    const { topicId } = request.params as { topicId: string };
+    const { topicId } = topicIdParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
     const page = parseInt((request.query as { page?: string }).page || "1", 10);
     const limit = parseInt(
@@ -64,7 +65,7 @@ export async function historyRoutes(app: FastifyInstance) {
   app.post(
     "/api/topics/:topicId/quiz/retry",
     async (request, reply) => {
-      const { topicId } = request.params as { topicId: string };
+      const { topicId } = topicIdParamsSchema.parse(request.params);
       const userId = (request.user as { userId: string }).userId;
       const [topic] = await db
         .select()
@@ -73,7 +74,12 @@ export async function historyRoutes(app: FastifyInstance) {
         .limit(1);
 
       if (!topic) return reply.status(404).send({ message: "Topic not found" });
-      const format = topic.examFormat as ExamFormat | null;
+      if (!topic.examFormat) {
+        return reply.code(400).send({
+          message: "Topic format not confirmed. Confirm the topic format before retrying.",
+        });
+      }
+      const format = topic.examFormat as ExamFormat;
 
       const missed = await getMissedQuestions(topicId, userId);
       if (missed.length === 0) {
@@ -122,7 +128,7 @@ export async function historyRoutes(app: FastifyInstance) {
           options: q.options,
           subtopicTags: q.subtopicTags,
           scopeItemId: q.scopeItemId,
-          isMultiSelect: format?.isMultiSelect ?? false,
+          isMultiSelect: format.isMultiSelect,
           isFlagged: q.isFlagged,
         })),
       });

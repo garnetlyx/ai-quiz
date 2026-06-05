@@ -22,6 +22,12 @@ import {
   normalizeScope,
 } from "../services/scope.js";
 import { createMaterialImportJob, refreshMaterialImportSummary } from "../services/materialImport.js";
+import {
+  idAndJobIdParamsSchema,
+  idAndQuestionIdParamsSchema,
+  idAndSuggestionIdParamsSchema,
+  idParamsSchema,
+} from "./validation.js";
 
 const createTopicSchema = z.object({
   description: z.string().min(1).max(500),
@@ -138,7 +144,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/topics/:id/confirm-format", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const parsed = confirmFormatSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ message: "Invalid input" });
@@ -219,7 +225,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:id", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
 
     const [topic] = await db
@@ -235,7 +241,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/topics/:id/material-imports", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
     const parts = request.files();
     const jobs = [];
@@ -260,7 +266,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:id/material-imports", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
     const [topic] = await db
       .select()
@@ -277,7 +283,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:id/material-imports/:jobId", async (request, reply) => {
-    const { id, jobId } = request.params as { id: string; jobId: string };
+    const { id, jobId } = idAndJobIdParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
     const [job] = await db
       .select()
@@ -289,7 +295,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:id/material-questions", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const { status } = request.query as {
       status?: "ready" | "auto_repaired" | "needs_repair" | "needs_user_review" | "unresolved";
     };
@@ -305,7 +311,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/topics/:id/material-questions/:questionId", async (request, reply) => {
-    const { id, questionId } = request.params as { id: string; questionId: string };
+    const { id, questionId } = idAndQuestionIdParamsSchema.parse(request.params);
     const parsed = materialQuestionUpdateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ message: "Invalid input" });
     const userId = (request.user as { userId: string }).userId;
@@ -350,7 +356,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:id/material-text-chunks", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
     const [topic] = await db
       .select()
@@ -362,7 +368,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/topics/:id/material-suggestions", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
     const [topic] = await db
       .select()
@@ -374,7 +380,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/topics/:id/material-suggestions/:suggestionId", async (request, reply) => {
-    const { id, suggestionId } = request.params as { id: string; suggestionId: string };
+    const { id, suggestionId } = idAndSuggestionIdParamsSchema.parse(request.params);
     const parsed = suggestionUpdateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ message: "Invalid input" });
     const userId = (request.user as { userId: string }).userId;
@@ -428,7 +434,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/topics/:id", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const parsed = updateTopicSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({
@@ -485,7 +491,7 @@ export async function topicRoutes(app: FastifyInstance) {
   });
 
   app.delete("/api/topics/:id", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
 
     const [archived] = await db

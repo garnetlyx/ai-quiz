@@ -6,6 +6,11 @@ import {
   getQuizResults,
   flagQuestion,
 } from "../services/quiz.js";
+import {
+  sessionAndQuestionIdParamsSchema,
+  sessionIdParamsSchema,
+  topicIdParamsSchema,
+} from "./validation.js";
 
 const createQuizSchema = z.object({
   questionCount: z.number().int().min(1).max(50),
@@ -19,8 +24,9 @@ const submitAnswersSchema = z.object({
   answers: z.record(z.array(z.number().int())),
 });
 
-const flagSchema = z.object({
+  const flagSchema = z.object({
   reason: z.string().min(1).max(500),
+  category: z.enum(["wrong_answer", "misleading_explanation", "question_unclear"]).optional(),
 });
 
 export async function quizRoutes(app: FastifyInstance) {
@@ -29,7 +35,7 @@ export async function quizRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/topics/:topicId/quiz", async (request, reply) => {
-    const { topicId } = request.params as { topicId: string };
+    const { topicId } = topicIdParamsSchema.parse(request.params);
     const parsed = createQuizSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ message: "Invalid input" });
@@ -64,7 +70,7 @@ export async function quizRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/quiz/:sessionId/submit", async (request, reply) => {
-    const { sessionId } = request.params as { sessionId: string };
+    const { sessionId } = sessionIdParamsSchema.parse(request.params);
     const parsed = submitAnswersSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ message: "Invalid input" });
@@ -92,7 +98,7 @@ export async function quizRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/quiz/:sessionId", async (request, reply) => {
-    const { sessionId } = request.params as { sessionId: string };
+    const { sessionId } = sessionIdParamsSchema.parse(request.params);
     const userId = (request.user as { userId: string }).userId;
 
     try {
@@ -113,10 +119,7 @@ export async function quizRoutes(app: FastifyInstance) {
   app.post(
     "/api/quiz/:sessionId/questions/:questionId/flag",
     async (request, reply) => {
-      const { sessionId, questionId } = request.params as {
-        sessionId: string;
-        questionId: string;
-      };
+      const { sessionId, questionId } = sessionAndQuestionIdParamsSchema.parse(request.params);
       const parsed = flagSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({ message: "Reason is required" });
@@ -125,7 +128,7 @@ export async function quizRoutes(app: FastifyInstance) {
       const userId = (request.user as { userId: string }).userId;
 
       try {
-        await flagQuestion(sessionId, questionId, parsed.data.reason, userId);
+        await flagQuestion(sessionId, questionId, parsed.data.reason, userId, parsed.data.category);
         return reply.send({ success: true });
       } catch (err) {
         const message =
