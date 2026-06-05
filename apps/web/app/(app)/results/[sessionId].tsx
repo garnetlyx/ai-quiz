@@ -128,6 +128,9 @@ export default function ResultsScreen() {
             <View style={styles.questionHeader}>
               <Text style={styles.questionNumber}>Q{index + 1}</Text>
               <View style={styles.headerActions}>
+                <Text style={[styles.sourceBadge, item.materialQuestionId ? styles.badgeMaterial : styles.badgeAi]}>
+                  {item.materialQuestionId ? "📚 Material Bank" : "🤖 AI Generated"}
+                </Text>
                 <Text style={[styles.resultBadge, item.isCorrect ? styles.badgeCorrect : styles.badgeWrong]}>
                   {item.isCorrect ? "Correct" : "Incorrect"}
                 </Text>
@@ -273,6 +276,9 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   questionNumber: { fontSize: 14, fontWeight: "600", color: "#666" },
   resultBadge: { fontSize: 12, fontWeight: "600", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  sourceBadge: { fontSize: 11, fontWeight: "500", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  badgeMaterial: { backgroundColor: "#eff6ff", color: "#2563eb" },
+  badgeAi: { backgroundColor: "#faf5ff", color: "#7c3aed" },
   badgeCorrect: { backgroundColor: "#dcfce7", color: "#16a34a" },
   badgeWrong: { backgroundColor: "#fef2f2", color: "#dc2626" },
   flagButton: { borderWidth: 1, borderColor: "#f59e0b", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },

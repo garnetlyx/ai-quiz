@@ -160,6 +160,7 @@ export interface Question {
   flagCategory: string | null;
   flagStatus: FlagStatus | null;
   flagVerificationResult: FlagVerificationResult | null;
+  materialQuestionId: string | null;
 }
 
 /** Stripped view — correct answers hidden during active quiz */
