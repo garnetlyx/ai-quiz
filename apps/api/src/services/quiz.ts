@@ -13,7 +13,7 @@ import {
   normalizeScope,
   scopeItemExists,
 } from "./scope.js";
-import type { ExamFormat, FlagVerificationResult, TopicScopeItem } from "@ai-quiz/shared";
+import type { ExamFormat, FlagVerificationResult, TopicScopeItem, TopicScope } from "@ai-quiz/shared";
 import { z } from "zod";
 
 export function computeContentHash(text: string): string {
@@ -300,26 +300,12 @@ export async function generateQuizForTopic(
     .filter((question) => matchesSubtopicFilter(question, options?.subtopicFilter));
   const selectedMaterial = stratifiedSample(unattempted, questionCount, scopePlan);
   const aiCount = Math.max(0, questionCount - selectedMaterial.length);
-  const materialContext = await getActiveMaterialContext(topicId);
-  const generated = aiCount > 0 ? await generateQuestions({
-    topic: topic.description,
-    format,
-    count: aiCount,
-    existingHashes: existingHashes.map((h) => h.contentHash),
-    subtopicFilter: options?.subtopicFilter,
-    instructions: materials.instructions,
-    scopeContext: [buildScopeContext(scope, materials), materialContext].filter(Boolean).join("\n\nImported material context:\n"),
-    scopePlan,
-    agent: options?.agent,
-  }) : [];
-
-  // TODO: implement fact-check context injection before question generation
 
   const [session] = await db
     .insert(quizSessions)
     .values({
       topicId,
-      questionCount: selectedMaterial.length + generated.length,
+      questionCount: selectedMaterial.length + aiCount,
       timerEnabled: options?.timerEnabled ?? false,
       timerDurationSeconds: options?.timerDurationSeconds ?? null,
       mode: options?.mode ?? "normal",
@@ -327,41 +313,25 @@ export async function generateQuizForTopic(
     })
     .returning();
 
-  const insertValues = [
-    ...selectedMaterial.map((q) => ({
-      sessionId: session.id,
-      topicId,
-      content: q.content,
-      options: q.options,
-      correctAnswers: q.correctAnswers,
-      explanations: q.explanations,
-      subtopicTags: q.subtopicTags,
-      scopeItemId: q.scopeItemId,
-      materialQuestionId: q.id,
-      contentHash: q.contentHash,
-    })),
-    ...generated.map((q) => ({
-      sessionId: session.id,
-      topicId,
-      content: q.content,
-      options: q.options,
-      correctAnswers: q.correctAnswers,
-      explanations: q.explanations,
-      subtopicTags: q.subtopicTags,
-      scopeItemId: q.scopeItemId && scopeItemExists(scope, q.scopeItemId)
-        ? q.scopeItemId
-        : scopePlan[0]?.id ?? null,
-      materialQuestionId: null,
-      contentHash: computeContentHash(q.content),
-    })),
-  ];
-
-  const questionRows = insertValues.length > 0 ? await db
+  const materialRows = selectedMaterial.length > 0 ? await db
     .insert(questions)
-    .values(insertValues)
+    .values(
+      selectedMaterial.map((q) => ({
+        sessionId: session.id,
+        topicId,
+        content: q.content,
+        options: q.options,
+        correctAnswers: q.correctAnswers,
+        explanations: q.explanations,
+        subtopicTags: q.subtopicTags,
+        scopeItemId: q.scopeItemId,
+        materialQuestionId: q.id,
+        contentHash: q.contentHash,
+      }))
+    )
     .returning() : [];
 
-  return {
+  const result = {
     session: {
       id: session.id,
       topicId: session.topicId,
@@ -371,7 +341,7 @@ export async function generateQuizForTopic(
       mode: session.mode,
       createdAt: session.createdAt,
     },
-    questions: questionRows.map((q) => ({
+    questions: materialRows.map((q) => ({
       id: q.id,
       content: q.content,
       options: q.options,
@@ -380,7 +350,86 @@ export async function generateQuizForTopic(
       isMultiSelect: format.isMultiSelect,
       isFlagged: q.isFlagged,
     })),
+    pendingCount: aiCount,
+    isMultiSelect: format.isMultiSelect,
   };
+
+  if (aiCount > 0) {
+    setTimeout(() => generateAiQuestions(
+      session.id,
+      topicId,
+      topic.description,
+      format,
+      aiCount,
+      existingHashes,
+      options,
+      materials,
+      scope,
+      scopePlan,
+    ).catch(() => {
+      db.update(quizSessions)
+        .set({ questionCount: selectedMaterial.length })
+        .where(eq(quizSessions.id, session.id))
+        .catch(() => undefined);
+    }), 0);
+  }
+
+  return result;
+}
+
+async function generateAiQuestions(
+  sessionId: string,
+  topicId: string,
+  topicDescription: string,
+  format: ExamFormat,
+  aiCount: number,
+  existingHashes: { contentHash: string }[],
+  options?: {
+    subtopicFilter?: string[];
+    agent?: AiAgent;
+  },
+  materials?: { instructions?: string },
+  scope?: TopicScope,
+  scopePlan?: { id: string; title: string; count: number }[],
+) {
+  const materialContext = await getActiveMaterialContext(topicId);
+  const normalizedScope = scope ? normalizeScope(scope) : undefined;
+  const normalizedMaterials = materials ? normalizeMaterials(materials) : undefined;
+
+  const generated = await generateQuestions({
+    topic: topicDescription,
+    format,
+    count: aiCount,
+    existingHashes: existingHashes.map((h) => h.contentHash),
+    subtopicFilter: options?.subtopicFilter,
+    instructions: normalizedMaterials?.instructions,
+    scopeContext: normalizedScope && normalizedMaterials
+      ? [buildScopeContext(normalizedScope, normalizedMaterials), materialContext].filter(Boolean).join("\n\nImported material context:\n")
+      : materialContext || undefined,
+    scopePlan: scopePlan || undefined,
+    agent: options?.agent,
+  });
+
+  for (const q of generated) {
+    await db.insert(questions).values({
+      sessionId,
+      topicId,
+      content: q.content,
+      options: q.options,
+      correctAnswers: q.correctAnswers,
+      explanations: q.explanations.map((e) => ({
+        optionId: e.optionId,
+        isCorrect: e.isCorrect,
+        explanation: e.explanation,
+      })),
+      subtopicTags: q.subtopicTags,
+      scopeItemId: q.scopeItemId && normalizedScope && scopeItemExists(normalizedScope, q.scopeItemId)
+        ? q.scopeItemId
+        : scopePlan?.[0]?.id ?? null,
+      materialQuestionId: null,
+      contentHash: computeContentHash(q.content),
+    });
+  }
 }
 
 export async function submitQuizAnswers(

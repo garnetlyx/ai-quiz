@@ -11,6 +11,9 @@ interface QuizState {
   isSubmitting: boolean;
   timerEnabled: boolean;
   timerDurationSeconds: number | null;
+  totalCount: number;
+  pendingCount: number;
+  isGenerating: boolean;
 
   startQuiz: (
     topicId: string,
@@ -23,6 +26,7 @@ interface QuizState {
     }
   ) => Promise<void>;
   startRetry: (topicId: string) => Promise<void>;
+  pollQuestions: () => Promise<void>;
   selectAnswer: (questionId: string, answerIndex: number) => void;
   nextQuestion: () => void;
   prevQuestion: () => void;
@@ -44,16 +48,23 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   isSubmitting: false,
   timerEnabled: false,
   timerDurationSeconds: null,
+  totalCount: 0,
+  pendingCount: 0,
+  isGenerating: false,
 
   startQuiz: async (topicId, questionCount, options) => {
     set({ isLoading: true });
     const res = await api.request<{
-      session: { id: string; timerEnabled?: boolean; timerDurationSeconds?: number | null };
+      session: { id: string; timerEnabled?: boolean; timerDurationSeconds?: number | null; questionCount: number };
       questions: QuizQuestion[];
+      pendingCount: number;
+      isMultiSelect?: boolean;
     }>(`/api/topics/${topicId}/quiz`, {
       method: "POST",
       body: { questionCount, ...options },
     });
+
+    const pendingCount = res.pendingCount || 0;
     set({
       sessionId: res.session.id,
       questions: res.questions,
@@ -62,7 +73,36 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       isLoading: false,
       timerEnabled: options?.timerEnabled ?? false,
       timerDurationSeconds: options?.timerDuration ?? null,
+      totalCount: res.session.questionCount,
+      pendingCount,
+      isGenerating: pendingCount > 0,
     });
+  },
+
+  pollQuestions: async () => {
+    const { sessionId, questions } = get();
+    if (!sessionId) return;
+
+    const res = await api.request<{
+      currentCount: number;
+      totalCount: number;
+      isComplete: boolean;
+      questions: QuizQuestion[];
+    }>(`/api/quiz/${sessionId}/status`);
+
+    const existingIds = new Set(questions.map((q) => q.id));
+    const newQuestions = res.questions.filter((q) => !existingIds.has(q.id));
+
+    if (newQuestions.length > 0) {
+      set((state) => ({
+        questions: [...state.questions, ...newQuestions],
+        pendingCount: Math.max(0, res.totalCount - res.currentCount),
+      }));
+    }
+
+    if (res.isComplete) {
+      set({ isGenerating: false, pendingCount: 0 });
+    }
   },
 
   startRetry: async (topicId) => {
@@ -135,5 +175,8 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       isSubmitting: false,
       timerEnabled: false,
       timerDurationSeconds: null,
+      totalCount: 0,
+      pendingCount: 0,
+      isGenerating: false,
     }),
 }));

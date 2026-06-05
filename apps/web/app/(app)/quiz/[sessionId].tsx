@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuizStore } from "@/stores/quiz";
 import { api } from "@/services/api";
+import type { QuizQuestion } from "@ai-quiz/shared";
 
 type FlagCategory = "wrong_answer" | "misleading_explanation" | "question_unclear";
 
@@ -34,17 +35,62 @@ export default function QuizFlowScreen() {
   const isSubmitting = useQuizStore((s) => s.isSubmitting);
   const timerEnabled = useQuizStore((s) => s.timerEnabled);
   const timerDurationSeconds = useQuizStore((s) => s.timerDurationSeconds);
+  const totalCount = useQuizStore((s) => s.totalCount);
+  const pendingCount = useQuizStore((s) => s.pendingCount);
+  const isGenerating = useQuizStore((s) => s.isGenerating);
+  const pollQuestions = useQuizStore((s) => s.pollQuestions);
 
   const [flagModalVisible, setFlagModalVisible] = useState(false);
   const [flagReason, setFlagReason] = useState("");
   const [flagCategory, setFlagCategory] = useState<FlagCategory>("wrong_answer");
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const currentQuestion = questions[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
   const isFirstQuestion = currentIndex === 0;
   const selectedAnswers = currentQuestion ? answers[currentQuestion.id] || [] : [];
+
+  useEffect(() => {
+    if (questions.length > 0 || !sessionId) return;
+
+    const hydrate = async () => {
+      try {
+        const res = await api.request<{
+          currentCount: number;
+          totalCount: number;
+          isComplete: boolean;
+          questions: QuizQuestion[];
+        }>(`/api/quiz/${sessionId}/status`);
+
+        useQuizStore.setState({
+          sessionId,
+          questions: res.questions,
+          totalCount: res.totalCount,
+          pendingCount: Math.max(0, res.totalCount - res.currentCount),
+          isGenerating: !res.isComplete,
+          isLoading: false,
+        });
+      } catch {
+        router.replace("/(app)/dashboard");
+      }
+    };
+    hydrate();
+  }, [sessionId, questions.length, router]);
+
+  // Poll for new AI-generated questions
+  useEffect(() => {
+    if (!isGenerating || !sessionId) return;
+
+    pollRef.current = setInterval(() => {
+      pollQuestions();
+    }, 3000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [isGenerating, sessionId, pollQuestions]);
 
   useEffect(() => {
     if (timerEnabled && timerDurationSeconds && timerDurationSeconds > 0) {
@@ -65,14 +111,14 @@ export default function QuizFlowScreen() {
     }
   }, [timeLeft]);
 
-  const handleSubmit = async () => {
+  const handleSubmit = useCallback(async () => {
     try {
       const result = await submitQuiz();
       router.replace(`/(app)/results/${result.session.id}`);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to submit");
     }
-  };
+  }, [submitQuiz, router]);
 
   const handleFlag = async () => {
     if (!currentQuestion || !sessionId) return;
@@ -93,6 +139,7 @@ export default function QuizFlowScreen() {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" />
+        <Text style={styles.loadingText}>Loading questions...</Text>
       </View>
     );
   }
@@ -109,11 +156,24 @@ export default function QuizFlowScreen() {
 
       <View style={styles.progressContainer}>
         <Text style={styles.progressText}>
-          {currentIndex + 1} of {questions.length}
+          {currentIndex + 1} of {totalCount > questions.length ? totalCount : questions.length}
         </Text>
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: `${((currentIndex + 1) / questions.length) * 100}%` }]} />
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${((currentIndex + 1) / (totalCount || questions.length)) * 100}%` },
+            ]}
+          />
         </View>
+        {isGenerating && (
+          <View style={styles.generatingRow}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.generatingText}>
+              Generating {pendingCount} more question{pendingCount !== 1 ? "s" : ""}...
+            </Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.questionCard}>
@@ -156,7 +216,7 @@ export default function QuizFlowScreen() {
           <Text style={styles.previousButtonText}>Previous</Text>
         </Pressable>
 
-        {isLastQuestion ? (
+        {isLastQuestion && !isGenerating ? (
           <Pressable
             style={[styles.submitButton, isSubmitting && styles.buttonDisabled]}
             onPress={handleSubmit}
@@ -168,6 +228,11 @@ export default function QuizFlowScreen() {
               <Text style={styles.submitButtonText}>Submit Quiz</Text>
             )}
           </Pressable>
+        ) : isLastQuestion && isGenerating ? (
+          <View style={styles.waitingButton}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.waitingText}>Waiting for questions...</Text>
+          </View>
         ) : (
           <Pressable style={styles.nextButton} onPress={nextQuestion}>
             <Text style={styles.nextButtonText}>Next →</Text>
@@ -236,12 +301,15 @@ export default function QuizFlowScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f5f5f5" },
   centered: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { marginTop: 12, color: "#666", fontSize: 14 },
   timerBar: { backgroundColor: "#dc2626", padding: 8, alignItems: "center" },
   timerText: { color: "#fff", fontSize: 18, fontWeight: "700" },
   progressContainer: { padding: 16, backgroundColor: "#fff" },
   progressText: { fontSize: 14, color: "#666", marginBottom: 8 },
   progressBar: { height: 4, backgroundColor: "#e5e7eb", borderRadius: 2 },
   progressFill: { height: 4, backgroundColor: "#2563eb", borderRadius: 2 },
+  generatingRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+  generatingText: { fontSize: 12, color: "#2563eb" },
   questionCard: { backgroundColor: "#fff", margin: 16, padding: 20, borderRadius: 12, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 },
   tag: { backgroundColor: "#eff6ff", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
@@ -262,6 +330,8 @@ const styles = StyleSheet.create({
   nextButton: { backgroundColor: "#2563eb", paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
   nextButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   buttonDisabled: { opacity: 0.6 },
+  waitingButton: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#eff6ff", paddingVertical: 12, paddingHorizontal: 20, borderRadius: 8 },
+  waitingText: { color: "#2563eb", fontSize: 14, fontWeight: "500" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 16 },
   modalContent: { backgroundColor: "#fff", padding: 24, borderRadius: 12 },
   modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },

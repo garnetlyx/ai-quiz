@@ -1,8 +1,8 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { users } from "../db/schema.js";
-import { eq } from "drizzle-orm";
+import { users, questions, quizSessions, topics } from "../db/schema.js";
+import { eq, count as drizzleCount } from "drizzle-orm";
 import {
   generateQuizForTopic,
   submitQuizAnswers,
@@ -135,8 +135,11 @@ export async function quizRoutes(app: FastifyInstance) {
 
       const userId = (request.user as { userId: string }).userId;
 
+      const [userRow] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
+      const flagAgent: AiAgent = userRow?.aiAgent && isValidAgent(userRow.aiAgent) ? userRow.aiAgent : "glm";
+
       try {
-        await flagQuestion(sessionId, questionId, parsed.data.reason, userId, parsed.data.category);
+        await flagQuestion(sessionId, questionId, parsed.data.reason, userId, parsed.data.category, flagAgent);
         return reply.send({ success: true });
       } catch (err) {
         const message =
@@ -150,4 +153,45 @@ export async function quizRoutes(app: FastifyInstance) {
       }
     }
   );
+
+  app.get("/api/quiz/:sessionId/status", async (request, reply) => {
+    const { sessionId } = sessionIdParamsSchema.parse(request.params);
+    const userId = (request.user as { userId: string }).userId;
+
+    const [row] = await db
+      .select()
+      .from(quizSessions)
+      .innerJoin(topics, eq(quizSessions.topicId, topics.id))
+      .where(eq(quizSessions.id, sessionId))
+      .limit(1);
+
+    if (!row) return reply.status(404).send({ message: "Session not found" });
+    if (row.topics.userId !== userId) return reply.status(403).send({ message: "Forbidden" });
+
+    const [countResult] = await db
+      .select({ count: drizzleCount() })
+      .from(questions)
+      .where(eq(questions.sessionId, sessionId));
+
+    const format = row.topics.examFormat as { isMultiSelect: boolean } | null;
+    const questionRows = await db
+      .select()
+      .from(questions)
+      .where(eq(questions.sessionId, sessionId));
+
+    return reply.send({
+      currentCount: countResult?.count ?? 0,
+      totalCount: row.quiz_sessions.questionCount,
+      isComplete: (countResult?.count ?? 0) >= row.quiz_sessions.questionCount,
+      questions: questionRows.map((q) => ({
+        id: q.id,
+        content: q.content,
+        options: q.options,
+        subtopicTags: q.subtopicTags,
+        scopeItemId: q.scopeItemId,
+        isMultiSelect: format?.isMultiSelect ?? false,
+        isFlagged: q.isFlagged,
+      })),
+    });
+  });
 }
