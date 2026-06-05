@@ -275,6 +275,12 @@ export const questions = pgTable(
     isCorrect: boolean("is_correct"),
     isFlagged: boolean("is_flagged").notNull().default(false),
     flagReason: text("flag_reason"),
+    flagCategory: text("flag_category"),
+    flagStatus: text("flag_status", {
+      enum: ["pending_review", "upheld", "corrected", "verification_failed"],
+    }),
+    flagVerificationResult: jsonb("flag_verification_result"),
+    flagVerifiedAt: timestamp("flag_verified_at", { withTimezone: true }),
     contentHash: text("content_hash").notNull(),
     position: serial("position"),
   },
