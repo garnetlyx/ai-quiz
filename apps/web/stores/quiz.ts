@@ -101,7 +101,12 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     }
 
     if (res.isComplete) {
-      set({ isGenerating: false, pendingCount: 0 });
+      set({
+        isGenerating: false,
+        pendingCount: 0,
+        totalCount: res.totalCount,
+        questions: res.questions,
+      });
     }
   },
 
