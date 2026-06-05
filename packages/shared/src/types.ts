@@ -134,6 +134,16 @@ export interface OptionExplanation {
   explanation: string;
 }
 
+export type FlagStatus = "pending_review" | "upheld" | "corrected" | "verification_failed";
+
+export interface FlagVerificationResult {
+  verdict: "upheld" | "corrected";
+  reasoning: string;
+  correctedAnswers?: number[];
+  correctedExplanations?: OptionExplanation[];
+  sources: Array<{ url: string; title: string; snippet: string }>;
+}
+
 export interface Question {
   id: string;
   sessionId: string;
@@ -147,6 +157,9 @@ export interface Question {
   isCorrect: boolean | null;
   isFlagged: boolean;
   flagReason: string | null;
+  flagCategory: string | null;
+  flagStatus: FlagStatus | null;
+  flagVerificationResult: FlagVerificationResult | null;
 }
 
 /** Stripped view — correct answers hidden during active quiz */
@@ -173,6 +186,7 @@ export interface QuizSubmitResponse {
 
 export interface FlagRequest {
   reason: string;
+  category?: "wrong_answer" | "misleading_explanation" | "question_unclear";
 }
 
 // History & Tracking Types
