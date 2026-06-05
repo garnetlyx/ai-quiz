@@ -4,7 +4,7 @@ import { FastifyInstance, FastifyRequest } from "fastify";
 
 async function authPlugin(app: FastifyInstance) {
   await app.register(jwt, {
-    secret: process.env.JWT_SECRET || "dev-secret-change-me",
+    secret: process.env.JWT_SECRET!,
   });
 
   app.decorate("authenticate", async function (request: FastifyRequest) {
