@@ -56,3 +56,4 @@ pnpm-debug.log*
 # Editors
 .vscode/
 .idea/
+.omo/
