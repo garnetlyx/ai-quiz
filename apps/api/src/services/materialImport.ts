@@ -17,6 +17,7 @@ import {
 import { extractMaterialQuestions, type MaterialQuestion } from "./materialExtraction.js";
 import { buildMaterialQuestionVerifier } from "./materialVerification.js";
 import { extractPdfLayoutText } from "./pdfLayoutText.js";
+import { ocrImageFile } from "./ocr.js";
 import { normalizeMaterials, normalizeScope } from "./scope.js";
 import type { MaterialChunkKind, TopicMaterials, TopicScope } from "@ai-quiz/shared";
 
@@ -65,10 +66,8 @@ function detectFileKind(mimeType: string, fileName: string): "pdf" | "image" | "
 }
 
 async function extractImageText(filePath: string): Promise<string> {
-  const { stdout } = await execFileAsync("tesseract", [filePath, "stdout", "-l", "eng"], {
-    maxBuffer: 1024 * 1024 * 50,
-  });
-  return stdout;
+  // Column-major OCR with optional LLM vision fallback (see services/ocr.ts).
+  return ocrImageFile(filePath);
 }
 
 async function extractTextFromFile(filePath: string, mimeType: string, fileName: string): Promise<string> {

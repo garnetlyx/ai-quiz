@@ -163,6 +163,11 @@ interface RepairExecutionResult {
 const OPTION_IDS = ["A", "B", "C", "D"] as const;
 const ANSWER_ENTRY_PATTERN = /(?:^|\s)(\d{1,3})[.)-]?\s*([A-D])\.?\s*(.*?)(?=\s+\d{1,3}[.)-]?\s*[A-D]\.?\s|$)/g;
 
+/** Match an "Answer Key" heading, tolerating markdown emphasis (**Answer Key**) added by LLM OCR. */
+function isAnswerKeyHeading(text: string): boolean {
+  return /^\*{0,2}Answer Key\*{0,2}\s*$/i.test(text.trim());
+}
+
 function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -207,7 +212,7 @@ function isNoiseLine(line: string): boolean {
   if (/^Chapter \d+:/i.test(line)) return false;
   if (/^Sample Exam \d+/i.test(line)) return false;
   if (/^Chapter Quiz$/i.test(line)) return false;
-  if (/^Answer Key/i.test(line)) return false;
+  if (isAnswerKeyHeading(line)) return false;
   if (/^Sample Questions/i.test(line)) return false;
   return false;
 }
@@ -309,7 +314,7 @@ function shouldStopAnswerKeyCollection(line: string, answerKey: { source: Materi
   const examNumber = parseSampleExam(line);
   if (examNumber && (answerKey.source !== "exam_question" || examNumber !== answerKey.context.examNumber)) return true;
 
-  return seenEntries > 0 && /^Answer Key/i.test(line);
+  return seenEntries > 0 && isAnswerKeyHeading(line);
 }
 
 function collectWindowedAnswerKeys(lines: SourceLine[]): Map<string, Map<number, AnswerEntry>> {
@@ -335,7 +340,7 @@ function collectWindowedAnswerKeys(lines: SourceLine[]): Map<string, Map<number,
       context.sectionTitle = line;
     } else if (/^Chapter Quiz$/i.test(line) || /^Sample Questions/i.test(line)) {
       context.sectionTitle = line;
-    } else if (/^Answer Key/i.test(line)) {
+    } else if (isAnswerKeyHeading(line)) {
       const answerKey = contextForAnswerKey(context);
       answerKeyContexts.push({ index, source: answerKey.source, context: answerKey.context });
     }
@@ -353,7 +358,7 @@ function collectWindowedAnswerKeys(lines: SourceLine[]): Map<string, Map<number,
 
     for (let index = backwardStart; index <= forwardEnd; index += 1) {
       if (index !== answerKey.index && index > answerKey.index && shouldStopAnswerKeyCollection(lines[index].text, answerKey, seenEntries)) break;
-      if (/^Answer Key/i.test(lines[index].text)) continue;
+      if (isAnswerKeyHeading(lines[index].text)) continue;
 
       const entries = answerKeyEntriesFromLine(lines[index].text)
         .filter((entry) => answerKey.source === "exam_question" ? entry.number <= 250 : entry.number <= 40);
@@ -598,7 +603,7 @@ function recoverOptionsFromSourceContext(raw: RawQuestion, lines: SourceLine[]):
   for (const line of linesNearRaw(raw, lines, 8, 20)) {
     if (line.number > raw.lineEnd && numberedQuestionMatch(line.text)) break;
     if (line.number > raw.lineEnd && isSectionStart(line.text)) break;
-    if (/^Answer Key/i.test(line.text)) break;
+    if (isAnswerKeyHeading(line.text)) break;
     const option = optionMatch(line.text);
     if (option) {
       currentId = option.id;
@@ -630,7 +635,7 @@ function recoverShortPrompt(raw: RawQuestion, lines: SourceLine[]): RepairFuncti
   const candidates = lines
     .filter((line) => line.number >= raw.lineStart - 6 && line.number < raw.lineStart)
     .map((line) => line.text)
-    .filter((line) => line.length >= 12 && !optionMatch(line) && !answerKeyEntryMatch(line) && !isSectionStart(line) && !/^Answer Key/i.test(line));
+    .filter((line) => line.length >= 12 && !optionMatch(line) && !answerKeyEntryMatch(line) && !isSectionStart(line) && !isAnswerKeyHeading(line));
   const recovered = candidates.find((line) => /\?$/.test(line)) || candidates[candidates.length - 1];
   if (!recovered) {
     return { modified: false, raw, actions: [makeRepairAction("recover_prompt_from_previous_lines", "failed", "Could not find a preceding prompt line.")] };
@@ -833,7 +838,7 @@ async function classifySections(
     if (/^Sample Questions/i.test(line.text)) source = "example_question";
     if (/^Chapter Quiz$/i.test(line.text)) source = "chapter_question";
     if (examNumber) source = "exam_question";
-    if (/^Answer Key/i.test(line.text) || parseChapter(line.text)) {
+    if (isAnswerKeyHeading(line.text) || parseChapter(line.text)) {
       if (current) candidates.push({
         sectionTitle: current.sectionTitle,
         source: current.source,
@@ -950,7 +955,7 @@ export async function extractMaterialQuestions(params: {
       continue;
     }
 
-    if (/^Answer Key/i.test(line.text)) {
+    if (isAnswerKeyHeading(line.text)) {
       currentQuestion = finalizeRawQuestion(rawQuestions, currentQuestion);
       inAnswerKey = true;
       source = context.examNumber && context.sectionTitle?.startsWith("Sample Exam")

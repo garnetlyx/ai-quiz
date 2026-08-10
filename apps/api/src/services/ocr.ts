@@ -1,0 +1,374 @@
+/**
+ * OCR fallback for PDF pages and images without a usable text layer.
+ *
+ * Two engines, selected by config:
+ *  - tesseract (default, local, free): TSV output with word bounding boxes,
+ *    reordered into column-major reading order for two-column layouts.
+ *  - LLM vision (opt-in advanced): sends the rendered page image to a
+ *    multimodal chat model and asks for text in reading order. Higher
+ *    quality on noisy scans, but costs a model round-trip per page.
+ *
+ * The chain is: pdftoppm renders the page → tesseract TSV → reorder → text.
+ * When `OCR_LLM_ENABLED` is on, the LLM path replaces tesseract for pages
+ * whose tesseract output looks structurally broken.
+ */
+import { execFile } from "node:child_process";
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+export interface OcrWordBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  text: string;
+}
+
+export interface OcrOptions {
+  /** Render DPI for pdftoppm. Default 300. */
+  dpi?: number;
+  /** tesseract page segmentation mode. Default 3 (fully automatic). */
+  psm?: number;
+  /** Force the LLM vision path even when tesseract succeeds. */
+  forceLLM?: boolean;
+}
+
+const DEFAULT_DPI = 300;
+const DEFAULT_PSM = 3;
+
+/** A page is considered to have no usable text layer when shorter than this. */
+export const TEXT_LAYER_MIN_CHARS = 50;
+
+function num(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function bool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  return raw === "true" || raw === "1" || raw === "yes";
+}
+
+/** Whether OCR fallback is enabled at all. Default true for testing. */
+export function isOcrFallbackEnabled(): boolean {
+  return bool("OCR_FALLBACK_ENABLED", true);
+}
+
+/** Whether the LLM vision path is enabled (the "advanced feature"). Default true now. */
+export function isOcrLlmEnabled(): boolean {
+  return bool("OCR_LLM_ENABLED", true);
+}
+
+function tesseractAvailable(): boolean {
+  return bool("OCR_TESSERACT_AVAILABLE", true);
+}
+
+function pdftoppmAvailable(): boolean {
+  return bool("OCR_PDFTOPPM_AVAILABLE", true);
+}
+
+/**
+ * Render a single PDF page to a PNG buffer using pdftoppm.
+ * pdftoppm cannot reliably stream PNG to stdout, so we spill to a temp
+ * file and read it back. Returns the raw PNG bytes.
+ */
+export async function renderPdfPage(
+  pdfPath: string,
+  pageNum: number,
+  dpi: number = num("OCR_DPI", DEFAULT_DPI)
+): Promise<Buffer> {
+  const dir = await mkdtemp(join(tmpdir(), "pdfrender-"));
+  try {
+    const prefix = join(dir, "page");
+    await execFileAsync(
+      "pdftoppm",
+      ["-f", String(pageNum), "-l", String(pageNum), "-r", String(dpi), "-png", pdfPath, prefix],
+      { encoding: "buffer", maxBuffer: 1024 * 1024 * 100 }
+    );
+    // pdftoppm names outputs page-NN.png (zero-padded by page count); find it.
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(dir);
+    const png = entries.find((f) => f.endsWith(".png"));
+    if (!png) throw new Error(`pdftoppm produced no PNG for page ${pageNum}`);
+    return await readFile(join(dir, png));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Run tesseract on an image buffer and return words with bounding boxes.
+ * Uses TSV output mode (level 5 = word) for geometry-aware column reorder.
+ */
+export async function ocrImageTesseract(
+  image: Buffer,
+  psm: number = num("OCR_TESSERACT_PSM", DEFAULT_PSM)
+): Promise<OcrWordBox[]> {
+  if (!tesseractAvailable()) return [];
+  // tesseract reads files, not stdin; spill to a temp file per call.
+  const dir = await mkdtemp(join(tmpdir(), "ocr-"));
+  try {
+    const imgPath = join(dir, "page.png");
+    await writeFile(imgPath, image);
+    const { stdout } = await execFileAsync(
+      "tesseract",
+      [imgPath, "stdout", "--psm", String(psm), "tsv"],
+      { encoding: "utf8", maxBuffer: 1024 * 1024 * 50 }
+    );
+    return parseTsv(stdout);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Parse tesseract TSV output into word boxes (confidence can be a float). */
+export function parseTsv(tsv: string): OcrWordBox[] {
+  const lines = tsv.split("\n");
+  if (lines.length === 0) return [];
+  const boxes: OcrWordBox[] = [];
+  // Skip header line.
+  for (let i = 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const cols = line.split("\t");
+    if (cols.length < 12) continue;
+    const level = Number(cols[4]);
+    if (level !== 5) continue; // only word rows
+    const conf = Number(cols[10]);
+    if (!Number.isFinite(conf) || conf < 0) continue;
+    const text = cols[11];
+    if (!text || !text.trim()) continue;
+    const left = Number(cols[6]);
+    const top = Number(cols[7]);
+    const width = Number(cols[8]);
+    const height = Number(cols[9]);
+    if (![left, top, width, height].every(Number.isFinite)) continue;
+    boxes.push({ left, top, right: left + width, bottom: top + height, text: text.trim() });
+  }
+  return boxes;
+}
+
+/**
+ * Reorder word boxes into column-major reading order for two-column layouts.
+ * Splits by the horizontal midpoint: left column (top→bottom), then right
+ * column (top→bottom). Single-column pages naturally pass through since all
+ * words cluster on one side.
+ */
+export function reorderColumnMajor(boxes: OcrWordBox[]): string {
+  if (boxes.length === 0) return "";
+  if (boxes.length === 1) return boxes[0].text;
+
+  const maxRight = boxes.reduce((m, b) => (b.right > m ? b.right : m), 0);
+  if (maxRight === 0) return boxes.map((b) => b.text).join(" ");
+  const mid = maxRight / 2;
+
+  // Only treat as two-column when there is a clear gutter: substantial word
+  // mass on both sides of the midpoint.
+  const left = boxes.filter((b) => b.right < mid || b.left + (b.right - b.left) / 2 < mid);
+  const right = boxes.filter((b) => b.left >= mid && b.left + (b.right - b.left) / 2 >= mid);
+  const useTwoColumn = left.length >= 3 && right.length >= 3;
+
+  if (!useTwoColumn) {
+    return linesFromBoxes(boxes).join("\n");
+  }
+  return [...linesFromBoxes(left), ...linesFromBoxes(right)].join("\n");
+}
+
+/** Group boxes into visual lines by y-proximity, then sort each line by x. */
+function linesFromBoxes(boxes: OcrWordBox[]): string[] {
+  if (boxes.length === 0) return [];
+  const sorted = [...boxes].sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: OcrWordBox[][] = [];
+  let current: OcrWordBox[] = [];
+  let currentTop = sorted[0].top;
+  for (const box of sorted) {
+    const tolerance = Math.max((box.bottom - box.top) * 1.5, 6);
+    if (current.length === 0 || Math.abs(box.top - currentTop) <= tolerance) {
+      current.push(box);
+      if (current.length === 1) currentTop = box.top;
+    } else {
+      if (current.length) lines.push(current);
+      current = [box];
+      currentTop = box.top;
+    }
+  }
+  if (current.length) lines.push(current);
+  return lines.map((line) =>
+    line.sort((a, b) => a.left - b.left).map((b) => b.text).join(" ")
+  );
+}
+
+function getLlmModel(): string {
+  return (
+    process.env.OCR_LLM_MODEL ||
+    process.env.MATERIAL_AI_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-4o"
+  );
+}
+
+/**
+ * Send the page image to a multimodal LLM and ask for text in column-major
+ * reading order. Uses native fetch (not the OpenAI SDK) so the request body
+ * is sent verbatim — some proxy routes (e.g. anthropic-messages bridges)
+ * mishandle the SDK's image payload serialization.
+ */
+export async function ocrImageWithLLM(image: Buffer, mimeType = "image/png"): Promise<string> {
+  const base64 = image.toString("base64");
+  const dataUrl = `data:${mimeType};base64,${base64}`;
+  const baseURL = process.env.OPENAI_BASE_URL || process.env.MATERIAL_AI_BASE_URL || "https://api.openai.com/v1";
+  const apiKey = process.env.OPENAI_API_KEY || process.env.MATERIAL_AI_API_KEY || "dummy";
+  const timeoutMs = num("OCR_LLM_TIMEOUT_MS", 120000);
+  const maxRetries = num("OCR_LLM_RETRIES", 2);
+  const url = `${baseURL.replace(/\/$/, "")}/chat/completions`;
+  const body = JSON.stringify({
+    model: getLlmModel(),
+    temperature: 0,
+    max_tokens: 4000,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an OCR engine for textbook pages. Extract ALL text from the image verbatim, " +
+          "in correct reading order. For two-column layouts, read the left column top-to-bottom " +
+          "completely, then the right column top-to-bottom. Preserve question numbers, option " +
+          "letters (A/B/C/D), and punctuation exactly. Output PLAIN TEXT only — no markdown, " +
+          "no bold (**), no bullet dashes, no headers. Just the raw text as printed.",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Extract the text from this page in column reading order." },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+  });
+
+  // Reasoning models (e.g. minimax-m3) can take 10-30s with thinking; use a hard
+  // signal timeout and retry transient network failures (ETIMEDOUT/ECONNRESET).
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!resp.ok) {
+        throw new Error(`LLM OCR HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      }
+      const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const content = data.choices?.[0]?.message?.content || "";
+      return stripReasoningWrapper(content);
+    } catch (err) {
+      lastErr = err;
+      // Only retry on network/timeout errors, not HTTP errors.
+      const code = (err as { cause?: { code?: string } }).cause?.code;
+      const isNet = code && /[ETIMEDOUT|ECONNRESET|EHOSTUNREACH|EAI_AGAIN|UND_ERR_SOCKET]/.test(code);
+      const isAbort = err instanceof Error && err.name === "TimeoutError";
+      if (!isNet && !isAbort) break;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("LLM OCR failed");
+}
+
+/** Strip chain-of-thought wrappers some reasoning models emit (e.g. minimax-m3 <think>…</think>). */
+function stripReasoningWrapper(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+    .trim();
+}
+
+/**
+ * OCR an image buffer, returning column-major text.
+ *
+ * Strategy:
+ *  1. tesseract TSV + column reorder (always, unless forceLLM)
+ *  2. If tesseract output is thin AND LLM enabled, retry with LLM vision
+ *  3. forceLLM skips tesseract entirely
+ */
+export async function ocrImage(
+  image: Buffer,
+  opts: OcrOptions = {}
+): Promise<string> {
+  const forceLLM = opts.forceLLM ?? false;
+  const llmEnabled = isOcrLlmEnabled();
+
+  if (forceLLM || llmEnabled) {
+    try {
+      return await ocrImageWithLLM(image);
+    } catch (err) {
+      if (forceLLM) throw err;
+      // fall through to tesseract
+    }
+  }
+
+  if (!tesseractAvailable()) return "";
+  const boxes = await ocrImageTesseract(image, opts.psm);
+  return reorderColumnMajor(boxes);
+}
+
+/**
+ * Render and OCR a single PDF page. Used by extractPdfLayoutText as a
+ * fallback when the page has no usable text layer.
+ */
+export async function ocrPdfPage(
+  pdfPath: string,
+  pageNum: number,
+  opts: OcrOptions = {}
+): Promise<string> {
+  if (!pdftoppmAvailable()) return "";
+  const image = await renderPdfPage(pdfPath, pageNum, opts.dpi);
+  return ocrImage(image, opts);
+}
+
+/** Heuristic: does this page text look too thin to skip OCR? */
+export function hasUsableTextLayer(pageText: string): boolean {
+  return pageText.replace(/\s/g, "").length >= TEXT_LAYER_MIN_CHARS;
+}
+
+/**
+ * Detect MIME type for a file path by extension (used by the LLM image path).
+ */
+export function mimeTypeForPath(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".tiff") || lower.endsWith(".tif")) return "image/tiff";
+  return "image/png";
+}
+
+/**
+ * OCR an image file from disk (used by materialImport for uploaded images).
+ */
+export async function ocrImageFile(filePath: string, opts: OcrOptions = {}): Promise<string> {
+  const image = await readFile(filePath);
+  // LLM path needs the correct MIME type; tesseract infers from file content.
+  if (isOcrLlmEnabled() || opts.forceLLM) {
+    try {
+      return await ocrImageWithLLM(image, mimeTypeForPath(filePath));
+    } catch {
+      // fall through to tesseract
+    }
+  }
+  if (!tesseractAvailable()) return "";
+  const boxes = await ocrImageTesseract(image, opts.psm);
+  return reorderColumnMajor(boxes);
+}
+
+// readFile is imported at top; this avoids a circular re-import quirk.
+
