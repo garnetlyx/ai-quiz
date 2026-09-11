@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "extract:materials": "tsx src/scripts/extract-material-questions.ts",
     "import:materials": "tsx src/scripts/import-material-questions.ts",
+    "rebuild:wa-agent": "tsx src/scripts/rebuild-wa-agent-bank.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

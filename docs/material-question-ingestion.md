@@ -2,6 +2,24 @@
 
 This workflow turns OCR text chunks into material-sourced practice questions.
 
+## Full Bank Rebuild (preferred)
+
+One deterministic, idempotent command rebuilds the whole WA agent bank and all
+report artifacts in the same run — per-PDF extraction from `data/wa-agent/pdf/`,
+practice tests from `data/wa-agent/4-exams/`, merge by contentHash, quiz-
+eligibility guard, and optional import:
+
+```sh
+npm run rebuild:wa-agent --workspace=apps/api -- \
+  --topic-id=<uuid> --replace-existing=true --build-scope=true
+```
+
+Omit `--topic-id` to rebuild the data files without importing. `--build-scope`
+derives a topic scope from the bank's chapter metadata when the topic has no
+scope yet; an existing curated scope is never overwritten.
+
+Individual steps (rarely needed):
+
 ## Current WA Agent Extraction
 
 Preferred: run from the original PDF so the extractor can use word coordinates and avoid mixing left/right columns:
