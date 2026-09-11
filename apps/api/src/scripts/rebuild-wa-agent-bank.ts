@@ -1,8 +1,9 @@
 import "../env.js";
-import { readdir, writeFile } from "fs/promises";
+import { readFile, readdir, writeFile } from "fs/promises";
 import path from "path";
 import { client } from "../db/index.js";
 import { extractMaterialQuestions, type MaterialQuestion } from "../services/materialExtraction.js";
+import { buildMaterialQuestionVerifier } from "../services/materialVerification.js";
 import { extractPdfLayoutText } from "../services/pdfLayoutText.js";
 import { buildReviewItems, mergeQuestionBanks } from "../services/materialBank.js";
 import { importMaterialQuestions, validatedReviewStatus } from "../services/materialImport.js";
@@ -36,10 +37,13 @@ async function main() {
   const topicId = getArg("topic-id");
   const replaceExisting = getArg("replace-existing") === "true";
   const buildScope = getArg("build-scope") === "true";
+  const legacySupplement = getArg("legacy-supplement");
 
   const outputDirAbs = resolveFromRoot(outputDir);
   const banks: MaterialQuestion[][] = [];
   const perSource: Record<string, unknown>[] = [];
+
+  const verifier = process.env.MATERIAL_AI_VERIFY === "false" ? null : buildMaterialQuestionVerifier();
 
   const pdfFiles = (await readdir(resolveFromRoot(pdfDir)))
     .filter((file) => file.toLowerCase().endsWith(".pdf"))
@@ -52,7 +56,7 @@ async function main() {
     const result = await extractMaterialQuestions({
       filePath: relativePath,
       text: layout.text,
-      verifier: null,
+      verifier,
       aiSectionLimit: 0,
     });
     banks.push(result.questions);
@@ -76,6 +80,20 @@ async function main() {
     needsRepairQuestions: practiceQuestions.filter((q) => q.reviewStatus === "needs_repair").length,
     needsUserReviewQuestions: practiceQuestions.filter((q) => q.reviewStatus === "needs_user_review").length,
   });
+
+  if (legacySupplement) {
+    const supplementPath = resolveFromRoot(legacySupplement);
+    const supplementQuestions = JSON.parse(await readFile(supplementPath, "utf8")) as MaterialQuestion[];
+    banks.push(supplementQuestions);
+    perSource.push({
+      file: legacySupplement,
+      totalQuestions: supplementQuestions.length,
+      readyQuestions: supplementQuestions.filter((q) => q.reviewStatus === "ready").length,
+      autoRepairedQuestions: supplementQuestions.filter((q) => q.reviewStatus === "auto_repaired").length,
+      needsRepairQuestions: supplementQuestions.filter((q) => q.reviewStatus === "needs_repair").length,
+      needsUserReviewQuestions: supplementQuestions.filter((q) => q.reviewStatus === "needs_user_review").length,
+    });
+  }
 
   const merged = mergeQuestionBanks(banks);
   const questions = merged.questions.map((question) => ({

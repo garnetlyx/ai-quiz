@@ -11,12 +11,23 @@ eligibility guard, and optional import:
 
 ```sh
 npm run rebuild:wa-agent --workspace=apps/api -- \
+  --legacy-supplement=data/wa-agent/legacy-supplement-questions.json \
   --topic-id=<uuid> --replace-existing=true --build-scope=true
 ```
 
 Omit `--topic-id` to rebuild the data files without importing. `--build-scope`
 derives a topic scope from the bank's chapter metadata when the topic has no
 scope yet; an existing curated scope is never overwritten.
+
+`--legacy-supplement` carries the 194 questions (mostly Sample Exams 2/3 from
+`Wa-agent3.pdf`) that were extracted by an unreproducible AI pass on 2026-08-08;
+that PDF's text layer does not contain them, so they cannot be re-extracted
+from source. Re-extracting scanned pages via the LLM vision OCR path is the
+long-term replacement for this supplement.
+
+The AI answer verifier runs by default when `OPENAI_API_KEY` is set (disable
+with `MATERIAL_AI_VERIFY=false`); it only fills in missing answers for
+otherwise-complete candidates.
 
 Individual steps (rarely needed):
 
