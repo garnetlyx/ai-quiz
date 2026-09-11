@@ -766,15 +766,14 @@ function normalizeRawQuestion(raw: RawQuestion, filePath: string, sequence: numb
   if (hasPollution) confidence = Math.min(confidence, 0.75);
   confidence = Math.min(1, Number(confidence.toFixed(2)));
   const hasAppliedRepair = repairActions.some((action) => action.status === "applied");
-  const isStructurallyValid = !isMalformed && !repairFlags.includes("answer_label_not_in_options");
   const reviewStatus: ReviewStatus = isMalformed
     ? "needs_repair"
     : repairFlags.includes("answer_label_not_in_options")
       ? "needs_repair"
-      : hasAppliedRepair && isStructurallyValid
-        ? "auto_repaired"
-        : repairFlags.includes("no_answer_label")
-          ? "needs_user_review"
+      : repairFlags.includes("no_answer_label")
+        ? "needs_user_review"
+        : hasAppliedRepair
+          ? "auto_repaired"
           : confidence >= 0.75
             ? "ready"
             : "needs_user_review";

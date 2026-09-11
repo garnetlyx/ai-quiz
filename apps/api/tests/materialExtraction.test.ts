@@ -189,6 +189,26 @@ Answer Key
       expect(result.questions[0].repairActions).toContainEqual(expect.objectContaining({ type: "split_merged_numbered_questions", status: "applied" }));
     });
 
+    it("routes repaired candidates without recovered answers to user review, not auto_repaired", async () => {
+      const text = `Chapter 1: The Nature of Real Property
+Chapter Quiz
+1. Which right applies to rivers? 2. Which right applies to lakes?
+A. Littoral
+B. Riparian
+C. Avulsion
+D. Reliction
+Answer Key
+1. B. Riparian rights belong to owners of property next to rivers or streams.`;
+
+      const result = await extractMaterialQuestions({ filePath: "fixture.txt", text });
+
+      const split = result.questions.find((question) => question.question.includes("lakes"));
+      expect(split).toBeDefined();
+      expect(split?.answerLabels).toEqual([]);
+      expect(split?.repairActions).toContainEqual(expect.objectContaining({ type: "split_merged_numbered_questions", status: "applied" }));
+      expect(split?.reviewStatus).toBe("needs_user_review");
+    });
+
     it("trims swallowed option text", async () => {
       const text = `Chapter 1: The Nature of Real Property
 Chapter Quiz
