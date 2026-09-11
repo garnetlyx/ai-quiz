@@ -266,29 +266,34 @@ async function parseTestFile(testNumber: number): Promise<MaterialQuestion[]> {
   return out;
 }
 
-async function main() {
+// Parses the 4-exams practice test files and deduplicates by contentHash.
+export async function parsePracticeTests(): Promise<MaterialQuestion[]> {
   const all: MaterialQuestion[] = [];
-  const stats: Record<number, { national: number; state: number; withAnswer: number; withAllOptions: number }> = {};
   for (const testNumber of [1, 2, 3, 4]) {
-    const questions = await parseTestFile(testNumber);
-    all.push(...questions);
-    const national = questions.filter((q) => q.subtopic === "National").length;
-    const state = questions.filter((q) => q.subtopic === "State").length;
-    const withAnswer = questions.filter((q) => q.answerLabels.length > 0).length;
-    const withAllOptions = questions.filter((q) => q.options.length === 4).length;
-    stats[testNumber] = { national, state, withAnswer, withAllOptions };
+    all.push(...await parseTestFile(testNumber));
   }
-
-  // Deduplicate within practice tests by contentHash.
   const seen = new Map<string, MaterialQuestion>();
   for (const question of all) {
     if (!seen.has(question.contentHash)) seen.set(question.contentHash, question);
   }
-  const unique = [...seen.values()];
+  return [...seen.values()];
+}
+
+async function main() {
+  const unique = await parsePracticeTests();
+
+  const stats: Record<string, { national: number; state: number; withAnswer: number; withAllOptions: number }> = {};
+  for (const question of unique) {
+    const testLabel = question.subtopicTags[0] || "unknown";
+    const entry = stats[testLabel] ||= { national: 0, state: 0, withAnswer: 0, withAllOptions: 0 };
+    if (question.subtopic === "National") entry.national += 1;
+    if (question.subtopic === "State") entry.state += 1;
+    if (question.answerLabels.length > 0) entry.withAnswer += 1;
+    if (question.options.length === 4) entry.withAllOptions += 1;
+  }
 
   await writeFile(resolveFromRoot(OUTPUT_FILE), `${JSON.stringify(unique, null, 2)}\n`);
   console.log(JSON.stringify({
-    totalParsed: all.length,
     uniqueAfterDedupe: unique.length,
     byTest: stats,
     ready: unique.filter((q) => q.reviewStatus === "ready").length,
