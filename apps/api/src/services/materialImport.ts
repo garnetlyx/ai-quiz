@@ -5,7 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { Queue, Worker, type Job } from "bullmq";
 import IORedis from "ioredis";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   materialImportJobs,
@@ -301,6 +301,112 @@ function scheduleImportFallback(jobId: string) {
       processMaterialImportJob(jobId).catch(() => undefined);
     }
   }, Number(process.env.MATERIAL_IMPORT_FALLBACK_MS || 5000));
+}
+
+import { buildScopeFromQuestions } from "./materialBank.js";
+
+export interface ImportMaterialQuestionsParams {
+  topicId: string;
+  questions: MaterialQuestion[];
+  replaceExisting: boolean;
+  buildScope?: boolean;
+  fileName?: string;
+}
+
+export interface ImportMaterialQuestionsResult {
+  jobId: string;
+  insertedCount: number;
+  skippedCount: number;
+  deactivatedCount: number;
+  removedCollisionCount: number;
+  scopeBuilt: boolean;
+}
+
+// Imports pre-extracted material questions into a topic. With replaceExisting,
+// the topic's active questions are retired first; hash-colliding rows are
+// removed so the incoming set lands cleanly. With buildScope, an empty topic
+// scope is derived from the questions' own chapter metadata (an existing
+// curated scope is never overwritten).
+export async function importMaterialQuestions(params: ImportMaterialQuestionsParams): Promise<ImportMaterialQuestionsResult> {
+  const { topicId, questions, replaceExisting } = params;
+
+  const [topic] = await db
+    .select()
+    .from(topics)
+    .where(and(eq(topics.id, topicId), isNull(topics.archivedAt)))
+    .limit(1);
+  if (!topic) throw new Error(`Topic ${topicId} not found (or archived)`);
+
+  const existingScope = normalizeScope(topic.scope);
+  let scope = existingScope;
+  let scopeBuilt = false;
+  if (params.buildScope && existingScope.chapters.length === 0) {
+    scope = buildScopeFromQuestions(questions);
+    await db.update(topics).set({ scope }).where(eq(topics.id, topic.id));
+    scopeBuilt = true;
+  }
+
+  const [job] = await db
+    .insert(materialImportJobs)
+    .values({
+      topicId: topic.id,
+      userId: topic.userId,
+      fileName: params.fileName || "material-questions.json",
+      filePath: "",
+      mimeType: "application/json",
+      status: "processing",
+      progress: 10,
+      summary: {},
+    })
+    .returning();
+
+  let deactivatedCount = 0;
+  let removedCollisionCount = 0;
+  if (replaceExisting) {
+    const deactivated = await db
+      .update(materialQuestions)
+      .set({ active: false })
+      .where(and(eq(materialQuestions.topicId, topic.id), eq(materialQuestions.active, true)))
+      .returning({ id: materialQuestions.id });
+    deactivatedCount = deactivated.length;
+
+    // Rows whose hash collides with the incoming set would silently block the
+    // fresh inserts via the (topic_id, content_hash) unique index; retire them.
+    const incomingHashes = questions
+      .map((question) => question.contentHash)
+      .filter(Boolean) as string[];
+    const removed = await db
+      .delete(materialQuestions)
+      .where(and(eq(materialQuestions.topicId, topic.id), inArray(materialQuestions.contentHash, incomingHashes)))
+      .returning({ id: materialQuestions.id });
+    removedCollisionCount = removed.length;
+
+    await db
+      .update(materialImportJobs)
+      .set({ progress: 30, updatedAt: new Date() })
+      .where(eq(materialImportJobs.id, job.id));
+  }
+
+  let insertedCount = 0;
+  for (const question of questions) {
+    const inserted = await persistQuestion(job.id, topic.id, question, scope);
+    if (inserted) insertedCount += 1;
+  }
+
+  await refreshMaterialImportSummary(job.id);
+  await db
+    .update(materialImportJobs)
+    .set({ status: "completed", progress: 100, updatedAt: new Date(), completedAt: new Date() })
+    .where(eq(materialImportJobs.id, job.id));
+
+  return {
+    jobId: job.id,
+    insertedCount,
+    skippedCount: questions.length - insertedCount,
+    deactivatedCount,
+    removedCollisionCount,
+    scopeBuilt,
+  };
 }
 
 export async function createMaterialImportJob(params: {
