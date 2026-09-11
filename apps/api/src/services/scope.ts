@@ -52,7 +52,7 @@ export function normalizeScope(value: unknown): TopicScope {
 
   return {
     chapters: chapters
-      .slice(0, 20)
+      .slice(0, 50)
       .map((chapter): TopicScopeChapter => {
         const rawItems = Array.isArray(chapter?.items) ? chapter.items : [];
         return {

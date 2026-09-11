@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { buildReviewItems } from "./materialBank.js";
 
 export type MaterialQuestionSource =
   | "example_question"
@@ -1151,17 +1152,7 @@ export async function extractMaterialQuestions(params: {
     }
   }
 
-  const reviewItems: MaterialReviewItem[] = questions
-    .filter((question) => question.reviewStatus === "needs_user_review")
-    .map((question) => ({
-      id: `review-${question.id}`,
-      reason: question.answerLabels.length === 0
-        ? "Missing answer"
-        : question.options.length !== 4
-          ? "Expected four answer options"
-          : "Low confidence OCR extraction",
-      question,
-    }));
+  const reviewItems = buildReviewItems(questions);
 
   const bySource: Record<MaterialQuestionSource, number> = {
     example_question: 0,
