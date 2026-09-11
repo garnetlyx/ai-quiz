@@ -248,7 +248,20 @@ export async function refreshMaterialImportSummary(jobId: string) {
     .where(eq(materialImportJobs.id, jobId));
 }
 
-async function persistQuestion(jobId: string, topicId: string, question: MaterialQuestion, scope: TopicScope) {
+// Quiz-eligible questions must carry answers that map to their options; anything else
+// stays in the visible review queue instead of entering the quiz pool.
+export function validatedReviewStatus(question: MaterialQuestion): MaterialQuestion["reviewStatus"] {
+  const hasValidAnswers =
+    question.answerLabels.length > 0 &&
+    question.correctAnswers.length === question.answerLabels.length &&
+    question.correctAnswers.every((index) => index >= 0 && index < question.options.length);
+  if ((question.reviewStatus === "ready" || question.reviewStatus === "auto_repaired") && !hasValidAnswers) {
+    return "needs_user_review";
+  }
+  return question.reviewStatus;
+}
+
+export async function persistQuestion(jobId: string, topicId: string, question: MaterialQuestion, scope: TopicScope): Promise<boolean> {
   const values = {
     topicId,
     jobId,
@@ -261,18 +274,20 @@ async function persistQuestion(jobId: string, topicId: string, question: Materia
     source: question.source,
     sourceLocation: question.sourceLocation,
     confidence: question.confidence,
-    reviewStatus: question.reviewStatus,
-    repairFlags: question.repairFlags,
-    repairActions: question.repairActions,
-    rawCandidate: question.rawCandidate,
+    reviewStatus: validatedReviewStatus(question),
+    repairFlags: question.repairFlags || [],
+    repairActions: question.repairActions || [],
+    rawCandidate: question.rawCandidate || {},
     active: true,
     contentHash: question.contentHash || hashText(question.question),
   };
 
-  await db
+  const [inserted] = await db
     .insert(materialQuestions)
     .values(values)
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: materialQuestions.id });
+  return Boolean(inserted);
 }
 
 function scheduleImportFallback(jobId: string) {
