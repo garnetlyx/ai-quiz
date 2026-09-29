@@ -2,6 +2,7 @@ import "../env.js";
 import { createHash } from "crypto";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
+import { pathToFileURL } from "url";
 import type { MaterialQuestion, MaterialQuestionSource, RepairFlag, ReviewStatus } from "../services/materialExtraction.js";
 
 interface Option {
@@ -55,7 +56,7 @@ function splitPortions(text: string): { national: string[]; state: string[] } {
   return { national, state };
 }
 
-function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
+export function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
   const result = new Map<number, ParsedQuestion>();
   let current: (ParsedQuestion & { promptLines: string[] }) | null = null;
   let currentOptionId: "A" | "B" | "C" | "D" | null = null;
@@ -76,6 +77,8 @@ function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
       if (current) currentOptionId = null;
       continue;
     }
+    // Page-break markers ("=====", "---") in the text dumps are layout, not content.
+    if (/^\s*[=\-_*]{3,}\s*$/.test(line)) continue;
 
     // Two-column OCR dumps merge columns, so a question number can appear
     // mid-line ("26. ...contract in the 29. How long must..."). Split there.
@@ -368,7 +371,10 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+// Only run when executed directly; the rebuild pipeline and tests import the parsers.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
