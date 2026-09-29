@@ -136,10 +136,14 @@ async function main() {
       const prompt = buildMaterialAuditPrompt(topicDescription, batch.map((question, i) => toAuditItem(question, i + 1)));
       let verdicts: MaterialAuditVerdict[] | null = null;
       for (let attempt = 1; attempt <= 2 && !verdicts; attempt++) {
+        let stdout = "";
         try {
-          verdicts = parseVerdicts(await runModel(command, prompt, timeoutMs), batch.length);
+          stdout = await runModel(command, prompt, timeoutMs);
+          verdicts = parseVerdicts(stdout, batch.length);
         } catch (error) {
-          console.error(`[audit] batch attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}`);
+          const rawPath = path.join(os.tmpdir(), `material-audit-failed-${Date.now()}.txt`);
+          if (stdout) await writeFile(rawPath, stdout);
+          console.error(`[audit] batch attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}${stdout ? ` (raw: ${rawPath})` : ""}`);
         }
       }
       if (!verdicts) {

@@ -1,4 +1,4 @@
-export const MATERIAL_AUDIT_PROMPT_VERSION = "material-audit-v1";
+export const MATERIAL_AUDIT_PROMPT_VERSION = "material-audit-v2";
 
 export interface MaterialAuditItem {
   n: number;
@@ -21,7 +21,7 @@ For EACH item, judge it strictly as a student would see it:
 
 Minor OCR typos (e.g. "Aproperty", missing "fi" letters, fullwidth punctuation) do NOT make an item incomplete; mention them in issues only.
 
-Output ONLY a JSON array, one object per item, in input order, with keys: n, complete, optionsClean, modelAnswer, keyVerdict, explanationMatches, issues. No prose, no code fences.
+Output ONLY a JSON array, one object per item, in input order, with keys: n, complete, optionsClean, modelAnswer, keyVerdict, explanationMatches, issues. No prose, no code fences. The output must be valid JSON: never put double quotes inside string values (quote OCR text with single quotes, e.g. 'rm' should be 'firm').
 
 ITEMS:
 ${JSON.stringify(items, null, 1)}`;
