@@ -23,7 +23,36 @@ scope yet; an existing curated scope is never overwritten.
 
 The AI answer verifier runs by default when `OPENAI_API_KEY` is set (disable
 with `MATERIAL_AI_VERIFY=false`); it only fills in missing answers for
-otherwise-complete candidates. After the merge, `export/verified-answer-overrides.json`
+otherwise-complete candidates. Run rebuilds with `MATERIAL_AI_VERIFY=false` when a
+model audit is in use: guessed answers are not source-verified, and a
+non-deterministic rebuild invalidates cached audit verdicts.
+
+## Model Audit (quality gate)
+
+Every servable (`ready` / `auto_repaired`) record is audited by an external
+model CLI chosen by the user, then the rebuild applies the verdicts:
+
+```sh
+npm run audit:materials --workspace=apps/api -- \
+  --topic-id=<uuid> \
+  "--cmd=pp --model local-m4m-deployed/qwen3.8-flash-next-q2 --no-tools --no-session -p"
+```
+
+- `--cmd` (or `MATERIAL_AUDIT_CMD`) is the full CLI invocation; the prompt is
+  appended as its last argument. The CLI runs in the OS temp dir with stdin closed.
+- Prompt: `apps/api/src/prompts/material-audit.ts` (versioned). Each item gets
+  `complete`, `optionsClean`, `modelAnswer`, `keyVerdict`, `explanationMatches`, `issues`.
+- Verdicts are cached in `data/wa-agent/export/model-audit.json`, keyed by a
+  fingerprint of question, options, key, and explanation; reruns only audit new
+  or changed records. Options: `--batch-size` (10), `--concurrency` (1), `--limit`.
+- The rebuild applies `export/model-audit.json` (override with `--model-audit`):
+  incomplete prompt or broken options -> `needs_repair` (`model_audit_structure`);
+  key `wrong` or `unsure` -> `needs_user_review` (`model_audit_key_disputed`,
+  model answer in the repair note); an explanation that belongs to another
+  question is dropped and the record stays servable.
+
+Order after any extractor change: rebuild without `--topic-id`, audit, then
+rebuild again with `--topic-id=<uuid> --replace-existing=true` to import. After the merge, `export/verified-answer-overrides.json`
 (human-verified answers keyed by contentHash, for records whose answers exist only
 on scanned answer-key pages) is applied and those records become `auto_repaired`.
 
