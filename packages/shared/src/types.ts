@@ -224,7 +224,9 @@ export type MaterialRepairFlag =
   | "too_short_prompt"
   | "explicit_ocr_layout_pollution"
   | "answer_label_not_in_options"
-  | "no_answer_label";
+  | "no_answer_label"
+  | "model_audit_structure"
+  | "model_audit_key_disputed";
 export type TopicSuggestionType = "scope" | "definition";
 export type TopicSuggestionStatus = "pending" | "approved" | "rejected";
 

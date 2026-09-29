@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import type { TopicScope } from "@ai-quiz/shared";
 import type { MaterialQuestion, MaterialReviewItem } from "./materialExtraction.js";
 import { normalizeScope } from "./scope.js";
@@ -72,4 +73,88 @@ export function buildScopeFromQuestions(questions: MaterialQuestion[]): TopicSco
         items: [...chapter.items].map((title) => ({ title })),
       })),
   });
+}
+
+export interface MaterialAuditVerdict {
+  complete: boolean;
+  optionsClean: boolean;
+  modelAnswer: "A" | "B" | "C" | "D" | null;
+  keyVerdict: "correct" | "wrong" | "unsure";
+  explanationMatches: boolean | null;
+  issues: string[];
+}
+
+export interface MaterialAuditRecord {
+  fingerprint: string;
+  promptVersion: string;
+  command: string;
+  auditedAt: string;
+  verdict: MaterialAuditVerdict;
+}
+
+// Only servable records are audited and gated; excluded ones are already off the quiz path.
+export function isServableMaterialQuestion(question: MaterialQuestion): boolean {
+  return question.reviewStatus === "ready" || question.reviewStatus === "auto_repaired";
+}
+
+// Identifies exactly what the model judged, so a verdict goes stale when the
+// question, options, key, or explanation change.
+export function materialAuditFingerprint(question: MaterialQuestion): string {
+  return createHash("sha256")
+    .update(JSON.stringify([
+      question.question,
+      question.options.map((option) => [option.id, option.text]),
+      question.answerLabels,
+      question.answerExplanation ?? null,
+    ]))
+    .digest("hex");
+}
+
+export function applyModelAudit(questions: MaterialQuestion[], audits: MaterialAuditRecord[]) {
+  const byFingerprint = new Map(audits.map((audit) => [audit.fingerprint, audit]));
+  const stats = { audited: 0, unaudited: 0, structure: 0, keyDisputed: 0, explanationDropped: 0 };
+
+  const result = questions.map((question) => {
+    if (!isServableMaterialQuestion(question)) return question;
+    const audit = byFingerprint.get(materialAuditFingerprint(question));
+    if (!audit) {
+      stats.unaudited += 1;
+      return question;
+    }
+    stats.audited += 1;
+    const { verdict } = audit;
+    const issues = verdict.issues.join("; ");
+    const next: MaterialQuestion = {
+      ...question,
+      repairFlags: [...question.repairFlags],
+      repairActions: [...question.repairActions],
+    };
+
+    if (!verdict.complete || !verdict.optionsClean) {
+      stats.structure += 1;
+      next.reviewStatus = "needs_repair";
+      next.repairFlags.push("model_audit_structure");
+      next.repairActions.push({ type: "model_audit", status: "failed", note: `Model audit (${audit.promptVersion}): ${issues}` });
+      return next;
+    }
+    if (verdict.keyVerdict !== "correct") {
+      stats.keyDisputed += 1;
+      next.reviewStatus = "needs_user_review";
+      next.repairFlags.push("model_audit_key_disputed");
+      next.repairActions.push({
+        type: "model_audit",
+        status: "failed",
+        note: `Model audit (${audit.promptVersion}): key ${verdict.keyVerdict}, model answer ${verdict.modelAnswer ?? "none"}. ${issues}`,
+      });
+      return next;
+    }
+    if (verdict.explanationMatches === false && next.answerExplanation) {
+      stats.explanationDropped += 1;
+      next.answerExplanation = null;
+      next.repairActions.push({ type: "model_audit", status: "applied", note: `Dropped explanation that does not belong to this question. ${issues}` });
+    }
+    return next;
+  });
+
+  return { questions: result, stats };
 }

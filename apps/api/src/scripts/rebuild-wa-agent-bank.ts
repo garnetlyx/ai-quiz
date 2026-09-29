@@ -6,7 +6,12 @@ import { client } from "../db/index.js";
 import { extractMaterialQuestions, type MaterialQuestion } from "../services/materialExtraction.js";
 import { buildMaterialQuestionVerifier } from "../services/materialVerification.js";
 import { extractPdfLayoutText } from "../services/pdfLayoutText.js";
-import { buildReviewItems, mergeQuestionBanks } from "../services/materialBank.js";
+import {
+  applyModelAudit,
+  buildReviewItems,
+  mergeQuestionBanks,
+  type MaterialAuditRecord,
+} from "../services/materialBank.js";
 import { importMaterialQuestions, validatedReviewStatus } from "../services/materialImport.js";
 import { parsePracticeTests } from "./extract-practice-tests.js";
 
@@ -14,6 +19,7 @@ const DEFAULT_PDF_DIR = "data/wa-agent/pdf";
 const DEFAULT_OUTPUT_DIR = "data/wa-agent/export";
 const PRACTICE_TESTS_LABEL = "data/wa-agent/4-exams";
 const DEFAULT_OVERRIDES_FILE = "data/wa-agent/export/verified-answer-overrides.json";
+const DEFAULT_MODEL_AUDIT_FILE = "data/wa-agent/export/model-audit.json";
 
 function repoRoot(): string {
   return path.resolve(process.cwd(), "../..");
@@ -100,7 +106,7 @@ async function main() {
   }
 
   const merged = mergeQuestionBanks(banks);
-  const questions = merged.questions.map((question) => ({
+  let questions = merged.questions.map((question) => ({
     ...question,
     reviewStatus: validatedReviewStatus(question),
   }));
@@ -138,6 +144,17 @@ async function main() {
     }
   }
 
+  // Model audit verdicts (see audit-material-bank.ts) gate what reaches quizzes:
+  // incomplete/corrupted records and disputed keys leave the servable pool.
+  const modelAuditPath = resolveFromRoot(getArg("model-audit") || DEFAULT_MODEL_AUDIT_FILE);
+  let modelAuditStats: ReturnType<typeof applyModelAudit>["stats"] | null = null;
+  if (existsSync(modelAuditPath)) {
+    const audits = JSON.parse(await readFile(modelAuditPath, "utf8")) as MaterialAuditRecord[];
+    const audited = applyModelAudit(questions, audits);
+    questions = audited.questions;
+    modelAuditStats = audited.stats;
+  }
+
   const writeJson = async (name: string, value: unknown) => {
     await writeFile(path.join(outputDirAbs, name), `${JSON.stringify(value, null, 2)}\n`);
   };
@@ -154,6 +171,7 @@ async function main() {
     autoRepairedQuestions: questions.filter((q) => q.reviewStatus === "auto_repaired").length,
     needsRepairQuestions: questions.filter((q) => q.reviewStatus === "needs_repair").length,
     needsUserReviewQuestions: questions.filter((q) => q.reviewStatus === "needs_user_review").length,
+    modelAudit: modelAuditStats,
     perSource,
   });
 
@@ -173,6 +191,7 @@ async function main() {
     totalQuestions: questions.length,
     duplicateQuestions: merged.duplicateCount,
     appliedAnswerOverrides: appliedOverrides,
+    modelAudit: modelAuditStats,
     bySource: perSource,
     import: importResult,
   }, null, 2));

@@ -16,7 +16,9 @@ export type RepairFlag =
   | "too_short_prompt"
   | "explicit_ocr_layout_pollution"
   | "answer_label_not_in_options"
-  | "no_answer_label";
+  | "no_answer_label"
+  | "model_audit_structure"
+  | "model_audit_key_disputed";
 
 export interface RepairAction {
   type: string;
@@ -459,6 +461,8 @@ function repairActionsForFlags(flags: RepairFlag[]): RepairAction[] {
     explicit_ocr_layout_pollution: makeRepairAction("repair_ocr_layout_pollution", "pending", "Remove page markers, OCR ligature artifacts, or obvious cross-column pollution."),
     answer_label_not_in_options: makeRepairAction("repair_answer_option_mapping", "pending", "Repair answer label mapping after option recovery."),
     no_answer_label: makeRepairAction("retry_answer_key_lookup", "pending", "Retry answer key matching with broader chapter or exam context."),
+    model_audit_structure: makeRepairAction("repair_from_source", "pending", "Model audit found an incomplete prompt or corrupted options; re-extract from the source page."),
+    model_audit_key_disputed: makeRepairAction("confirm_answer_key", "pending", "Model audit disputes the answer key; confirm against the source answer key."),
   };
   return flags.map((flag) => ({ ...actions[flag] }));
 }
