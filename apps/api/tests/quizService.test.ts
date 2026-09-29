@@ -113,28 +113,34 @@ describe("computeContentHash", () => {
   });
 });
 
+// buildScopePlan shuffles items for diversity, so assert order-independent invariants.
+function planShape(plan: { id: string; count: number }[]) {
+  return {
+    ids: plan.map((entry) => entry.id).sort(),
+    counts: plan.map((entry) => entry.count).sort((a, b) => b - a),
+  };
+}
+
 describe("buildScopePlan", () => {
   it("distributes questions evenly across items", () => {
-    expect(buildScopePlan(scopeItems, 10)).toEqual([
-      { id: "alpha", title: "Alpha", count: 4 },
-      { id: "beta", title: "Beta", count: 3 },
-      { id: "gamma", title: "Gamma", count: 3 },
-    ]);
+    expect(planShape(buildScopePlan(scopeItems, 10))).toEqual({
+      ids: ["alpha", "beta", "gamma"],
+      counts: [4, 3, 3],
+    });
   });
 
   it("honors a subtopic filter", () => {
-    expect(buildScopePlan(scopeItems, 5, ["beta", "Gamma"])).toEqual([
-      { id: "beta", title: "Beta", count: 3 },
-      { id: "gamma", title: "Gamma", count: 2 },
-    ]);
+    expect(planShape(buildScopePlan(scopeItems, 5, ["beta", "Gamma"]))).toEqual({
+      ids: ["beta", "gamma"],
+      counts: [3, 2],
+    });
   });
 
   it("falls back to all items when the filter matches none", () => {
-    expect(buildScopePlan(scopeItems, 4, ["missing"])).toEqual([
-      { id: "alpha", title: "Alpha", count: 2 },
-      { id: "beta", title: "Beta", count: 1 },
-      { id: "gamma", title: "Gamma", count: 1 },
-    ]);
+    expect(planShape(buildScopePlan(scopeItems, 4, ["missing"]))).toEqual({
+      ids: ["alpha", "beta", "gamma"],
+      counts: [2, 1, 1],
+    });
   });
 
   it("returns an empty plan for zero questions", () => {

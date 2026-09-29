@@ -51,11 +51,9 @@ describe("topic scope", () => {
       5
     );
 
-    expect(plan).toEqual([
-      { id: "a", title: "A", count: 2 },
-      { id: "b", title: "B", count: 2 },
-      { id: "c", title: "C", count: 1 },
-    ]);
+    // Items are shuffled, so only the balance is deterministic.
+    expect(plan.map((entry) => entry.id).sort()).toEqual(["a", "b", "c"]);
+    expect(plan.map((entry) => entry.count).sort((x, y) => y - x)).toEqual([2, 2, 1]);
   });
 
   it("merges suggested scope without duplicating existing topics", () => {
