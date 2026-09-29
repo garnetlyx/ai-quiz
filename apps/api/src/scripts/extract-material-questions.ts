@@ -8,7 +8,7 @@ import {
 import { extractPdfLayoutText } from "../services/pdfLayoutText.js";
 import { buildMaterialQuestionVerifier } from "../services/materialVerification.js";
 
-const DEFAULT_INPUT_DIR = "data/wa-agent";
+const DEFAULT_INPUT_DIR = "data/wa-agent/text";
 const DEFAULT_INPUT_FILE = "Wa-agent.txt";
 
 function repoRoot(): string {

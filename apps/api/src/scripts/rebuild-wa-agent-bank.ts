@@ -1,4 +1,5 @@
 import "../env.js";
+import { existsSync } from "fs";
 import { readFile, readdir, writeFile } from "fs/promises";
 import path from "path";
 import { client } from "../db/index.js";
@@ -10,8 +11,9 @@ import { importMaterialQuestions, validatedReviewStatus } from "../services/mate
 import { parsePracticeTests } from "./extract-practice-tests.js";
 
 const DEFAULT_PDF_DIR = "data/wa-agent/pdf";
-const DEFAULT_OUTPUT_DIR = "data/wa-agent";
+const DEFAULT_OUTPUT_DIR = "data/wa-agent/export";
 const PRACTICE_TESTS_LABEL = "data/wa-agent/4-exams";
+const DEFAULT_OVERRIDES_FILE = "data/wa-agent/export/verified-answer-overrides.json";
 
 function repoRoot(): string {
   return path.resolve(process.cwd(), "../..");
@@ -52,7 +54,9 @@ async function main() {
 
   for (const pdfFile of pdfFiles) {
     const relativePath = `${pdfDir}/${pdfFile}`;
+    console.error(`[rebuild] extracting ${relativePath}...`);
     const layout = await extractPdfLayoutText(resolveFromRoot(relativePath));
+    console.error(`[rebuild] ${pdfFile}: layout done (${layout.diagnostics.pages} pages), parsing questions...`);
     const result = await extractMaterialQuestions({
       filePath: relativePath,
       text: layout.text,
@@ -101,6 +105,39 @@ async function main() {
     reviewStatus: validatedReviewStatus(question),
   }));
 
+  // Human-verified answers for records whose answers live only on scanned pages the
+  // deterministic extractor cannot read. Keyed by contentHash; see the overrides file.
+  const overridesFile = getArg("answer-overrides") || DEFAULT_OVERRIDES_FILE;
+  const overridesPath = resolveFromRoot(overridesFile);
+  let appliedOverrides = 0;
+  if (existsSync(overridesPath)) {
+    const overrides = JSON.parse(await readFile(overridesPath, "utf8")) as Array<{
+      contentHash: string;
+      answerLabels?: string[];
+      correctAnswers?: number[];
+      answerExplanation?: string;
+      options?: { id: string; text: string }[];
+      reviewStatus?: string;
+      note: string;
+    }>;
+    const byHash = new Map(overrides.map((o) => [o.contentHash, o]));
+    for (const question of questions) {
+      const override = byHash.get(question.contentHash);
+      if (!override) continue;
+      if (override.options) question.options = override.options as typeof question.options;
+      if (override.answerLabels) question.answerLabels = override.answerLabels as typeof question.answerLabels;
+      if (override.correctAnswers) question.correctAnswers = override.correctAnswers;
+      if (override.answerExplanation) question.answerExplanation = override.answerExplanation;
+      question.reviewStatus = (override.reviewStatus as typeof question.reviewStatus) || "auto_repaired";
+      question.repairActions = [...(question.repairActions || []), {
+        type: "verified_answer_override",
+        status: "applied",
+        note: override.note,
+      }];
+      appliedOverrides += 1;
+    }
+  }
+
   const writeJson = async (name: string, value: unknown) => {
     await writeFile(path.join(outputDirAbs, name), `${JSON.stringify(value, null, 2)}\n`);
   };
@@ -135,6 +172,7 @@ async function main() {
   console.log(JSON.stringify({
     totalQuestions: questions.length,
     duplicateQuestions: merged.duplicateCount,
+    appliedAnswerOverrides: appliedOverrides,
     bySource: perSource,
     import: importResult,
   }, null, 2));

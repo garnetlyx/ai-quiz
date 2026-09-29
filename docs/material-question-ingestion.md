@@ -11,7 +11,7 @@ eligibility guard, and optional import:
 
 ```sh
 npm run rebuild:wa-agent --workspace=apps/api -- \
-  --legacy-supplement=data/wa-agent/legacy-supplement-questions.json \
+  --legacy-supplement=data/wa-agent/export/legacy-supplement-questions.json \
   --topic-id=<uuid> --replace-existing=true --build-scope=true
 ```
 
@@ -19,15 +19,13 @@ Omit `--topic-id` to rebuild the data files without importing. `--build-scope`
 derives a topic scope from the bank's chapter metadata when the topic has no
 scope yet; an existing curated scope is never overwritten.
 
-`--legacy-supplement` carries the 194 questions (mostly Sample Exams 2/3 from
-`Wa-agent3.pdf`) that were extracted by an unreproducible AI pass on 2026-08-08;
-that PDF's text layer does not contain them, so they cannot be re-extracted
-from source. Re-extracting scanned pages via the LLM vision OCR path is the
-long-term replacement for this supplement.
+`--legacy-supplement` carries the 234 questions (Sample Exam 2 mid-range and 101–140, Sample Exams 3, plus extras) that the deterministic extractor cannot fully recover from `Wa-agent3.pdf`; that PDF's answer-key and question pages are scanned without a text layer. The 101–140 block and several answer fixes were recovered by column-aware OCR against the book's answer key (2026-09-21). Re-extracting scanned pages via the LLM vision OCR path remains the long-term replacement for the remainder.
 
 The AI answer verifier runs by default when `OPENAI_API_KEY` is set (disable
 with `MATERIAL_AI_VERIFY=false`); it only fills in missing answers for
-otherwise-complete candidates.
+otherwise-complete candidates. After the merge, `export/verified-answer-overrides.json`
+(human-verified answers keyed by contentHash, for records whose answers exist only
+on scanned answer-key pages) is applied and those records become `auto_repaired`.
 
 Individual steps (rarely needed):
 
@@ -39,7 +37,7 @@ Preferred: run from the original PDF so the extractor can use word coordinates a
 MATERIAL_AI_SECTION_LIMIT=0 \
 npm run extract:materials --workspace=apps/api -- \
   --input-pdf=/Users/gl/Dropbox/content/academic/RealEstateAgent_WA/wa-agent/Wa-agent.pdf \
-  --output-dir=data/wa-agent
+  --output-dir=data/wa-agent/export
 ```
 
 This also writes:
@@ -60,7 +58,7 @@ npm run extract:materials --workspace=apps/api
 
 The local model is optional. Without the env vars, the deterministic parser still runs and flags more records for review.
 
-Outputs are written to `data/wa-agent/`:
+Outputs are written to `data/wa-agent/export/`:
 
 - `material-questions.json`: extracted question records
 - `material-extraction-report.json`: counts and extraction health
@@ -140,7 +138,7 @@ Each material question uses a future-ingestion schema:
 
 ## OCR Notes
 
-`data/wa-agent/Wa-agent.txt` comes from PDF OCR and includes two-column layout loss. Prefer `--input-pdf` because the PDF still preserves word coordinates. The PDF layout path groups words into lines, estimates page-local skew drift, detects single- vs two-column vertical bands, orders left column before right column, then feeds that text into the same question parser.
+`data/wa-agent/text/Wa-agent.txt` (and `Wa-agent2.txt`, the same book's second, lower-quality scan) come from PDF OCR and include two-column layout loss. Prefer `--input-pdf` because the PDF still preserves word coordinates. The PDF layout path groups words into lines, estimates page-local skew drift, detects single- vs two-column vertical bands, orders left column before right column, then feeds that text into the same question parser.
 
 ## WA Agent Benchmark
 
@@ -155,4 +153,4 @@ Latest 3-PDF column-aware run:
 - `manualReviewRate`: 0.0455
 - `repairDebtRate`: 0.1953
 
-The 116 previously hidden/rejected records are now visible as `needs_repair` with flags/actions in `data/wa-agent/benchmark-repair-visible/material-repair-diagnostics.json`. They are not claimed as automatically repaired.
+The 116 previously hidden/rejected records are now visible as `needs_repair` with flags/actions in `data/wa-agent/benchmarks/repair-visible/material-repair-diagnostics.json`. They are not claimed as automatically repaired.

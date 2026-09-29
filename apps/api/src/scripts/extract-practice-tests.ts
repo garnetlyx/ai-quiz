@@ -23,7 +23,7 @@ interface ParsedQuestion {
 
 const OPTION_IDS: ("A" | "B" | "C" | "D")[] = ["A", "B", "C", "D"];
 const EXAMS_DIR = "data/wa-agent/4-exams";
-const OUTPUT_FILE = "data/wa-agent/practice-test-questions.json";
+const OUTPUT_FILE = "data/wa-agent/export/practice-test-questions.json";
 
 function repoRoot(): string {
   return path.resolve(process.cwd(), "../..");
@@ -59,6 +59,7 @@ function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
   const result = new Map<number, ParsedQuestion>();
   let current: (ParsedQuestion & { promptLines: string[] }) | null = null;
   let currentOptionId: "A" | "B" | "C" | "D" | null = null;
+  let autoOptionMode = false;
 
   const flush = () => {
     if (!current) return;
@@ -66,6 +67,7 @@ function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
     result.set(current.number, { number: current.number, prompt: current.prompt, options: current.options });
     current = null;
     currentOptionId = null;
+    autoOptionMode = false;
   };
 
   for (const rawLine of lines) {
@@ -75,15 +77,33 @@ function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
       continue;
     }
 
+    // Two-column OCR dumps merge columns, so a question number can appear
+    // mid-line ("26. ...contract in the 29. How long must..."). Split there.
+    const mid = line.match(/^(.*\S)\s+(\d{1,3})[.)]\s+([A-Z].*)$/);
+    if (mid && current) {
+      // keep the leading part for the current question; start a new one from the trailing part
+      processLine(mid[1]);
+      flush();
+      current = { number: Number(mid[2]), prompt: "", promptLines: [mid[3]], options: [] };
+      currentOptionId = null;
+    } else {
+      processLine(line);
+    }
+  }
+  flush();
+  return result;
+
+  function processLine(line: string) {
     const questionMatch = line.match(/^\s*(\d{1,3})[.)]\s+(.+)$/);
     if (questionMatch && !/^([A-Da-d])(?:[a-z]?)[.)]/.test(line.trim())) {
       flush();
       current = { number: Number(questionMatch[1]), prompt: "", promptLines: [questionMatch[2]], options: [] };
       currentOptionId = null;
-      continue;
+      autoOptionMode = false;
+      return;
     }
 
-    if (!current) continue;
+    if (!current) return;
 
     const optionMatch = line.match(/^\s*([A-Da-d])(?:[a-z]?)[.)]\s*(.*)$/);
     if (optionMatch) {
@@ -95,7 +115,30 @@ function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
         current.options.find((opt) => opt.id === id)!.text = cleanText(`${current.options.find((opt) => opt.id === id)!.text} ${text}`);
       }
       currentOptionId = id;
-      continue;
+      autoOptionMode = false;
+      return;
+    }
+
+    // Letterless option lines (OCR ate the "A." prefixes): after a prompt that
+    // ends with '?' or ':', short standalone lines become options A-D in order.
+    if (
+      currentOptionId === null &&
+      (autoOptionMode || current.options.length === 0) &&
+      /[?:]$/.test(current.promptLines.join(" ").trimEnd()) &&
+      !/[?:]$/.test(line.trim()) &&
+      /^[A-Z][A-Za-z' .,$%()\d/-]{2,60}$/.test(line.trim())
+    ) {
+      if (current.options.length < 4) {
+        current.options.push({ id: OPTION_IDS[current.options.length], text: line.trim() });
+        autoOptionMode = true;
+      }
+      return;
+    }
+
+    // OCR noise line after a complete letterless option set: discard instead of
+    // polluting the prompt (e.g. stray "pA wp" page artifacts).
+    if (autoOptionMode && current.options.length >= 4 && line.trim().length < 20) {
+      return;
     }
 
     if (currentOptionId) {
@@ -105,13 +148,12 @@ function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
       current.promptLines.push(line.trim());
     }
   }
-  flush();
-  return result;
 }
 
 function parseAnswerKey(lines: string[]): Map<number, ParsedAnswer> {
   const result = new Map<number, ParsedAnswer>();
   let current: ({ number: number; label: ParsedAnswer["label"]; explanationLines: string[] }) | null = null;
+  let awaitingLetter = false;
 
   const flush = () => {
     if (!current) return;
@@ -127,16 +169,41 @@ function parseAnswerKey(lines: string[]): Map<number, ParsedAnswer> {
       continue;
     }
 
-    // Answers look like: "34. B) Some text" / "34. B. Some text" / "34) B Some text"
-    const answerMatch = line.match(/^\s*(\d{1,3})[.)]\s*([A-D])[.)]?\s+(.+)$/);
+    // Answers look like: "34. B) Some text" / "34. B. Some text" / "34) B Some text",
+    // with OCR drift: "18.  C)Aspecified date" (no space after paren), "29. __D) Agency"
+    // (stray underscores), "23. | C) ..." (stray pipe), "67. 8B) ..." (stray digit),
+    // "33. A)$0" (no explanation gap), or "92.A" (letter only).
+    const answerMatch = line.match(/^\s*(\d{1,3})[.)]\s*[_\s|]*[(]?(?:\d\s*)?([A-Da-d])[.)]\s*(.*)$/);
     if (answerMatch) {
       flush();
       current = {
         number: Number(answerMatch[1]),
-        label: answerMatch[2] as "A" | "B" | "C" | "D",
-        explanationLines: [answerMatch[3]],
+        label: answerMatch[2].toUpperCase() as "A" | "B" | "C" | "D",
+        explanationLines: answerMatch[3] ? [answerMatch[3]] : [],
       };
+      awaitingLetter = false;
       continue;
+    }
+
+    // Number on its own line, letter on the next: "22.\nD) 1 year"
+    const numberOnly = line.match(/^\s*(\d{1,3})[.)]\s*$/);
+    if (numberOnly) {
+      flush();
+      current = { number: Number(numberOnly[1]), label: null, explanationLines: [] };
+      awaitingLetter = true;
+      continue;
+    }
+
+    // Letter line following a number-only line
+    if (awaitingLetter && current) {
+      const nextLetter = line.match(/^\s*([A-Da-d])[.)]\s*(.*)$/);
+      if (nextLetter) {
+        current.label = nextLetter[1].toUpperCase() as "A" | "B" | "C" | "D";
+        if (nextLetter[2]) current.explanationLines.push(nextLetter[2]);
+        awaitingLetter = false;
+        continue;
+      }
+      awaitingLetter = false;
     }
 
     // Fallback: leading "34." with no letter (key may omit letter for corrected items)

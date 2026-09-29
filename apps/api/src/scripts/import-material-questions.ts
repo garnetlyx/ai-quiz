@@ -16,7 +16,7 @@ function getArg(name: string): string | null {
 }
 
 async function main() {
-  const input = getArg("input") || "data/wa-agent/material-questions.json";
+  const input = getArg("input") || "data/wa-agent/export/material-questions.json";
   const topicId = getArg("topic-id");
   const replaceExisting = getArg("replace-existing") === "true";
   const buildScope = getArg("build-scope") === "true";
