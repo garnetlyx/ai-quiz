@@ -1,5 +1,5 @@
 import "../env.js";
-import { execFile } from "child_process";
+import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { readFile, rename, writeFile } from "fs/promises";
 import os from "os";
@@ -34,16 +34,35 @@ function getArg(name: string): string | null {
 }
 
 // Runs the user-chosen model CLI with the prompt as its final argument. Runs in
-// the OS temp dir so an agent-style CLI never sees or touches the repo.
+// the OS temp dir so an agent-style CLI never sees or touches the repo. The CLI
+// may be a wrapper that spawns the real process, so it runs in its own process
+// group and the whole group is killed on timeout.
 function runModel(command: string, prompt: string, timeoutMs: number): Promise<string> {
   const [bin, ...args] = command.split(/\s+/).filter(Boolean);
   return new Promise((resolve, reject) => {
-    const child = execFile(bin, [...args, prompt], { cwd: os.tmpdir(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
-      if (error) reject(error);
+    const child = spawn(bin, [...args, prompt], { cwd: os.tmpdir(), detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let timedOut = false;
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.resume();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        // group already gone
+      }
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) reject(new Error(`model CLI timed out after ${timeoutMs}ms`));
+      else if (code !== 0) reject(new Error(`model CLI exited with code ${code}`));
       else resolve(stdout);
     });
-    // Agent CLIs in print mode read stdin until EOF when it is not a TTY; close it.
-    child.stdin?.end();
   });
 }
 
