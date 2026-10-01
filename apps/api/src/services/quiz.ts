@@ -128,7 +128,7 @@ function shuffle<T>(array: T[]): T[] {
   return result;
 }
 
-function stratifiedSample<T extends { scopeItemId: string | null; subtopicTags: string[] | null }>(
+export function stratifiedSample<T extends { scopeItemId: string | null; subtopicTags: string[] | null }>(
   pool: T[],
   count: number,
   scopePlan: { id: string; count: number }[]
@@ -171,10 +171,13 @@ function stratifiedSample<T extends { scopeItemId: string | null; subtopicTags: 
     selected.push(...items.slice(0, take));
   }
 
+  // Quotas can under-fill (a planned scope item may have few or no bank
+  // questions). Top up from every unselected question, unassigned first, so the
+  // AI is only asked for questions the bank genuinely cannot supply.
   if (selected.length < count) {
-    const remaining = shuffledUnassigned.filter(
-      (item) => !selected.includes(item)
-    );
+    const chosen = new Set(selected);
+    const leftoverScoped = shuffle([...grouped.values()].flat().filter((item) => !chosen.has(item)));
+    const remaining = [...shuffledUnassigned, ...leftoverScoped];
     selected.push(...remaining.slice(0, count - selected.length));
   }
 

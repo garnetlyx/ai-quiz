@@ -4,6 +4,7 @@ import {
   buildScopePlan,
   computeContentHash,
   getWeakSubtopics,
+  stratifiedSample,
 } from "../src/services/quiz.js";
 import type { TopicScopeItem } from "@ai-quiz/shared";
 
@@ -151,6 +152,34 @@ describe("buildScopePlan", () => {
     expect(buildScopePlan([scopeItems[0]], 5)).toEqual([
       { id: "alpha", title: "Alpha", count: 5 },
     ]);
+  });
+});
+
+describe("stratifiedSample", () => {
+  const item = (id: string, scopeItemId: string | null) => ({ id, scopeItemId, subtopicTags: [] as string[] });
+
+  it("tops up from leftover scoped questions when quotas cannot fill the request", () => {
+    // Plan wants 1 per scope item, but only scope item "a" has questions.
+    const pool = [
+      ...Array.from({ length: 20 }, (_, i) => item(`a${i}`, "a")),
+      ...Array.from({ length: 5 }, (_, i) => item(`b${i}`, "b")),
+    ];
+    const plan = [{ id: "a", count: 1 }, { id: "b", count: 1 }, { id: "c", count: 8 }];
+
+    const picked = stratifiedSample(pool, 10, plan);
+
+    expect(picked).toHaveLength(10);
+    expect(new Set(picked.map((q) => q.id)).size).toBe(10);
+  });
+
+  it("still honors quotas first", () => {
+    const pool = [
+      ...Array.from({ length: 30 }, (_, i) => item(`a${i}`, "a")),
+      ...Array.from({ length: 30 }, (_, i) => item(`b${i}`, "b")),
+    ];
+    const picked = stratifiedSample(pool, 10, [{ id: "a", count: 5 }, { id: "b", count: 5 }]);
+    expect(picked.filter((q) => q.scopeItemId === "a")).toHaveLength(5);
+    expect(picked.filter((q) => q.scopeItemId === "b")).toHaveLength(5);
   });
 });
 
