@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyModelAudit,
   buildScopeFromQuestions,
+  dedupeNearDuplicates,
   materialAuditFingerprint,
   mergeQuestionBanks,
   type MaterialAuditRecord,
@@ -13,7 +14,7 @@ describe("mergeQuestionBanks", () => {
   it("keeps the first occurrence of each content hash across banks", () => {
     const first = materialQuestionFixture({ contentHash: "dup" });
     const second = materialQuestionFixture({ contentHash: "dup", question: "Duplicate wording" });
-    const unique = materialQuestionFixture({ contentHash: "unique" });
+    const unique = materialQuestionFixture({ contentHash: "unique", question: "Which right applies to oceanfront property?" });
 
     const merged = mergeQuestionBanks([[first, unique], [second]]);
 
@@ -178,5 +179,79 @@ describe("applyModelAudit", () => {
     const [result] = applyModelAudit([question], [auditFor(question, { keyVerdict: "wrong" })]).questions;
     expect(result.reviewStatus).toBe("needs_repair");
     expect(result.repairFlags).toEqual([]);
+  });
+});
+
+describe("dedupeNearDuplicates", () => {
+  const opts = (texts: string[]) => texts.map((text, i) => ({ id: "ABCD"[i] as "A", text }));
+  const base = {
+    question: "A limited partnership is a preferable method of owning investment property because:",
+    options: opts(["it limits liability", "it avoids taxes", "it is cheaper", "it is faster"]),
+    answerLabels: ["A" as const],
+    correctAnswers: [0],
+  };
+
+  it("keeps one copy of a repeated question and prefers the one with fewer flags", () => {
+    const flagged = materialQuestionFixture({ ...base, contentHash: "a", repairFlags: ["option_swallowed_text"], reviewStatus: "ready" });
+    const clean = materialQuestionFixture({ ...base, contentHash: "b", sourceLocation: { filePath: "second.pdf", lineStart: 1, lineEnd: 1, sectionTitle: null } });
+
+    const result = dedupeNearDuplicates([flagged, clean]);
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].contentHash).toBe("b");
+    expect(result.removedCount).toBe(1);
+  });
+
+  it("treats a truncated copy of the same answer as compatible", () => {
+    const full = materialQuestionFixture({
+      ...base, contentHash: "full",
+      options: opts(["register with the Department of Licensing at least 20 days before work", "x1", "x2", "x3"]),
+    });
+    const truncated = materialQuestionFixture({
+      ...base, contentHash: "cut", repairFlags: ["option_swallowed_text"],
+      options: opts(["register with the Department of Licensing at least", "x1", "x2", "x3"]),
+    });
+
+    const result = dedupeNearDuplicates([truncated, full]);
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].contentHash).toBe("full");
+    expect(result.questions[0].reviewStatus).toBe("ready");
+    expect(result.conflictCount).toBe(0);
+  });
+
+  it("sends copies that disagree on the answer to user review instead of picking one", () => {
+    const first = materialQuestionFixture({ ...base, contentHash: "a" });
+    const second = materialQuestionFixture({ ...base, contentHash: "b", answerLabels: ["B"], correctAnswers: [1] });
+
+    const result = dedupeNearDuplicates([first, second]);
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].reviewStatus).toBe("needs_user_review");
+    expect(result.questions[0].repairFlags).toContain("model_audit_key_disputed");
+    expect(result.conflictCount).toBe(1);
+  });
+
+  it("does not merge questions that share a prompt but have different options", () => {
+    const one = materialQuestionFixture({ ...base, question: "Which is true?", contentHash: "a" });
+    const two = materialQuestionFixture({ ...base, question: "Which is true?", contentHash: "b", options: opts(["p", "q", "r", "s"]) });
+
+    expect(dedupeNearDuplicates([one, two]).questions).toHaveLength(2);
+  });
+});
+
+describe("mergeQuestionBanks normalization", () => {
+  it("normalizes OCR text and drops near-duplicates across banks", () => {
+    const text = { question: "Alisting agent owes duties to the seller", options: [
+      { id: "A" as const, text: "loyalty" }, { id: "B" as const, text: "cost" }, { id: "C" as const, text: "none" }, { id: "D" as const, text: "tax" },
+    ] };
+    const pdf = materialQuestionFixture({ ...text, contentHash: "pdf", sourceLocation: { filePath: "book.pdf", lineStart: 1, lineEnd: 1, sectionTitle: null } });
+    const plain = materialQuestionFixture({ ...text, question: "A listing agent owes duties to the seller", contentHash: "txt" });
+    const filler = Array.from({ length: 6 }, (_, i) => materialQuestionFixture({ contentHash: `f${i}`, question: `The listing agent and the seller number ${i}` }));
+
+    const merged = mergeQuestionBanks([[pdf], [plain, ...filler]]);
+
+    expect(merged.questions.filter((q) => q.question.startsWith("A listing agent owes"))).toHaveLength(1);
+    expect(merged.duplicateCount).toBeGreaterThanOrEqual(1);
   });
 });
