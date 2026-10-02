@@ -14,6 +14,7 @@ import {
   type MaterialAuditRecord,
 } from "../services/materialBank.js";
 import { importMaterialQuestions, validatedReviewStatus } from "../services/materialImport.js";
+import { applyMaterialRepairs } from "../services/materialRepairs.js";
 import { parsePracticeTests } from "./extract-practice-tests.js";
 
 const DEFAULT_PDF_DIR = "data/wa-agent/pdf";
@@ -150,6 +151,17 @@ async function main() {
     }
   }
 
+  // Content recovery and AI adaptations retain their source evidence and must
+  // be audited under their new fingerprints before importing the rebuilt bank.
+  const contentRepairsPath = getArg("content-repairs");
+  let appliedContentRepairs = 0;
+  if (contentRepairsPath) {
+    const repairs = JSON.parse(await readFile(resolveFromRoot(contentRepairsPath), "utf8"));
+    const repaired = applyMaterialRepairs(questions, repairs);
+    questions = repaired.questions;
+    appliedContentRepairs = repaired.applied;
+  }
+
   // Model audit verdicts (see audit-material-bank.ts) gate what reaches quizzes:
   // incomplete/corrupted records and disputed keys leave the servable pool.
   const modelAuditPath = resolveFromRoot(getArg("model-audit") || DEFAULT_MODEL_AUDIT_FILE);
@@ -178,11 +190,15 @@ async function main() {
     needsRepairQuestions: questions.filter((q) => q.reviewStatus === "needs_repair").length,
     needsUserReviewQuestions: questions.filter((q) => q.reviewStatus === "needs_user_review").length,
     modelAudit: modelAuditStats,
+    appliedContentRepairs,
     perSource,
   });
 
   let importResult: Awaited<ReturnType<typeof importMaterialQuestions>> | null = null;
   if (topicId) {
+    if (contentRepairsPath && (!modelAuditStats || modelAuditStats.unaudited > 0)) {
+      throw new Error("Content repairs require complete model audit coverage before import; audit the rebuilt file first");
+    }
     importResult = await importMaterialQuestions({
       topicId,
       questions,
@@ -197,6 +213,7 @@ async function main() {
     totalQuestions: questions.length,
     duplicateQuestions: merged.duplicateCount,
     appliedAnswerOverrides: appliedOverrides,
+    appliedContentRepairs,
     modelAudit: modelAuditStats,
     bySource: perSource,
     import: importResult,
