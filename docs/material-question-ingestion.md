@@ -35,6 +35,23 @@ tied to the fingerprint of the record it fixes and carries source quotes; repair
 records become `auto_repaired` without an audit verdict, so the rebuild refuses to
 import until the audit covers them.
 
+## Column-Aware OCR Sources
+
+The PDFs' text layers interleave the two columns of the "Sample Questions" boxes, and
+`Wa-agent3.pdf` has no text layer at all. `npm run ocr:pdf-pages --workspace=apps/api`
+re-reads every page with the band-aware reader (`services/ocr.ts`: full-width text is
+read top to bottom, a two-column band left column then right column), caches each page
+under `data/wa-agent/ocr/<book>/NNN.txt`, and writes one text file per book
+(`data/wa-agent/ocr/<book>.txt`, pages behind `[PDF_PAGE n]` markers). Interrupted runs
+resume from the cache. Pass `--ocr-text-dir=data/wa-agent/ocr` to the rebuild to read
+those files as extra copies of the same questions: the merge keeps the best copy of
+each question and adds the ones the text layer lost.
+
+Order: `ocr:pdf-pages` -> rebuild without `--topic-id` -> `audit:materials` -> rebuild
+until `modelAudit.unaudited` is 0 -> rebuild/import with `--topic-id`. Importing with
+`--replace-existing=true` replaces the topic's active bank outright (no retired copies
+are kept); questions the user excluded stay excluded.
+
 ## Merge-Stage Cleanup
 
 `mergeQuestionBanks` (`services/materialBank.ts`) runs these steps, in order, on every rebuild:
@@ -49,9 +66,12 @@ import until the audit covers them.
    system word list (`MATERIAL_WORDLIST`, default `/usr/share/dict/words`; the rebuild
    fails if it is missing), nor repeated in another question, nor capitalized, goes to
    `needs_repair` (`explicit_ocr_layout_pollution`). Counts use one copy per question.
-4. Collapse repeated scans of a question: same answer choices and a similar prompt
-   (Jaccard >= 0.6). The copy with fewer flags and more complete options wins; copies
-   that disagree on the keyed answer leave the survivor in `needs_user_review`.
+4. Collapse repeated copies of a question (pairwise: at least three matching answer
+   choices with a contained prompt, or four matching choices with a similar prompt). The
+   survivor is chosen by: servable and not failed by the model audit, then fewer
+   unreadable words, then fewer flags, an explanation, more complete options. Copies
+   that disagree on the keyed answer (ignoring copies the audit already failed, and OCR
+   wording differences in the same answer) leave the survivor in `needs_user_review`.
 
 Any text change alters the audit fingerprint, so rerun the audit and rebuild until
 `modelAudit.unaudited` is 0 before importing.
