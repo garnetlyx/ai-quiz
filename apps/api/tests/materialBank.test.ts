@@ -331,6 +331,12 @@ describe("flagGarbledQuestions", () => {
     expect(isKnownWord("agslare")).toBe(false);
   });
 
+  it("does not accept garbage that is a tiny dictionary entry plus a suffix", () => {
+    const withShort = buildKnownWordPredicate(new Set([...words, "fu", "us"]));
+    expect(withShort("fuing")).toBe(false);
+    expect(withShort("payments")).toBe(true);
+  });
+
   it("leaves excluded questions untouched", () => {
     const garbled = make("The mortgage agslare idierestand theassome records", "x", { reviewStatus: "needs_repair" });
     const result = flagGarbledQuestions([garbled], isKnownWord);

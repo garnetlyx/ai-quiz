@@ -112,6 +112,7 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
 
 const GARBLE_WORD = /(?<![A-Za-z'’])[A-Za-z]{3,}(?![A-Za-z'’])/g;
 const GARBLE_MIN_UNKNOWN_WORDS = 2;
+const MIN_INFLECTION_STEM = 3;
 const INFLECTION_SUFFIXES = ["s", "es", "ed", "d", "ing", "ly", "er", "ers", "al", "ation", "ment"];
 
 // A word counts as known if the list has it or a simple inflection of it.
@@ -121,7 +122,8 @@ export function buildKnownWordPredicate(words: Set<string>): (word: string) => b
     for (const suffix of INFLECTION_SUFFIXES) {
       if (!word.endsWith(suffix)) continue;
       const stem = word.slice(0, -suffix.length);
-      if (words.has(stem) || words.has(`${stem}e`)) return true;
+      // Tiny stems ("fu" + "ing") match garbage far more often than real words.
+      if (stem.length >= MIN_INFLECTION_STEM && (words.has(stem) || words.has(`${stem}e`))) return true;
     }
     return word.endsWith("ies") && words.has(`${word.slice(0, -3)}y`);
   };
