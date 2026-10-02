@@ -61,22 +61,30 @@ export function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
   let current: (ParsedQuestion & { promptLines: string[] }) | null = null;
   let currentOptionId: "A" | "B" | "C" | "D" | null = null;
   let autoOptionMode = false;
+  let detachedOptionLines: string[] | null = null;
 
   const flush = () => {
     if (!current) return;
+    // A column of A-D labels followed by a column of four texts is unambiguous.
+    // Keep incomplete groups empty so downstream validation cannot certify them.
+    if (detachedOptionLines?.length === OPTION_IDS.length) {
+      current.options.forEach((option, index) => {
+        option.text = cleanText(detachedOptionLines![index]);
+      });
+    }
     current.prompt = cleanText(current.promptLines.join(" "));
     result.set(current.number, { number: current.number, prompt: current.prompt, options: current.options });
     current = null;
     currentOptionId = null;
     autoOptionMode = false;
+    detachedOptionLines = null;
   };
 
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+$/, "");
-    if (!line.trim()) {
-      if (current) currentOptionId = null;
-      continue;
-    }
+    // Empty lines and page breaks are layout only. An option may continue on
+    // the next line/page even when OCR inserted blank lines between its words.
+    if (!line.trim()) continue;
     // Page-break markers ("=====", "---") in the text dumps are layout, not content.
     if (/^\s*[=\-_*]{3,}\s*$/.test(line)) continue;
 
@@ -97,7 +105,7 @@ export function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
   return result;
 
   function processLine(line: string) {
-    const questionMatch = line.match(/^\s*(\d{1,3})[.)]\s+(.+)$/);
+    const questionMatch = line.match(/^\s*(\d{1,3})[.)]\s*(\S.*)$/);
     if (questionMatch && !/^([A-Da-d])(?:[a-z]?)[.)]/.test(line.trim())) {
       flush();
       current = { number: Number(questionMatch[1]), prompt: "", promptLines: [questionMatch[2]], options: [] };
@@ -108,7 +116,17 @@ export function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
 
     if (!current) return;
 
-    const optionMatch = line.match(/^\s*([A-Da-d])(?:[a-z]?)[.)]\s*(.*)$/);
+    const punctuatedOption = line.match(/^\s*([A-Da-d])(?:[a-z]?)[.)]\s*(.*)$/);
+    // OCR sometimes drops label punctuation ("Cc 4 times", "B $500,000").
+    // Only accept the next expected label, so a sentence beginning "A ..."
+    // inside an existing option does not become another option.
+    const unpunctuatedOption = line.match(/^\s*([A-Da-d])(?:[a-z]?)\s+(.+)$/);
+    const expectedId = OPTION_IDS[current.options.length];
+    const optionMatch = punctuatedOption || (
+      unpunctuatedOption?.[1].toUpperCase() === expectedId &&
+      (current.options.length > 0 || /^\d/.test(unpunctuatedOption[2]))
+        ? unpunctuatedOption : null
+    );
     if (optionMatch) {
       const id = optionMatch[1].toUpperCase() as "A" | "B" | "C" | "D";
       const text = optionMatch[2].trim();
@@ -119,6 +137,14 @@ export function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
       }
       currentOptionId = id;
       autoOptionMode = false;
+      if (current.options.length === OPTION_IDS.length && current.options.every((option) => !option.text)) {
+        detachedOptionLines = [];
+      }
+      return;
+    }
+
+    if (detachedOptionLines) {
+      detachedOptionLines.push(line.trim());
       return;
     }
 
@@ -153,7 +179,7 @@ export function parseQuestions(lines: string[]): Map<number, ParsedQuestion> {
   }
 }
 
-function parseAnswerKey(lines: string[]): Map<number, ParsedAnswer> {
+export function parseAnswerKey(lines: string[]): Map<number, ParsedAnswer> {
   const result = new Map<number, ParsedAnswer>();
   let current: ({ number: number; label: ParsedAnswer["label"]; explanationLines: string[] }) | null = null;
   let awaitingLetter = false;
@@ -172,11 +198,13 @@ function parseAnswerKey(lines: string[]): Map<number, ParsedAnswer> {
       continue;
     }
 
+    if (/^\s*[=\-_*]{3,}\s*$/.test(line)) continue;
+
     // Answers look like: "34. B) Some text" / "34. B. Some text" / "34) B Some text",
     // with OCR drift: "18.  C)Aspecified date" (no space after paren), "29. __D) Agency"
     // (stray underscores), "23. | C) ..." (stray pipe), "67. 8B) ..." (stray digit),
     // "33. A)$0" (no explanation gap), or "92.A" (letter only).
-    const answerMatch = line.match(/^\s*(\d{1,3})[.)]\s*[_\s|]*[(]?(?:\d\s*)?([A-Da-d])[.)]\s*(.*)$/);
+    const answerMatch = line.match(/^\s*(\d{1,3})[.,)]\s*[_\s|]*[(]?(?:\d\s*)?([A-Da-d])[.)]\s*(.*)$/);
     if (answerMatch) {
       flush();
       current = {
