@@ -184,6 +184,9 @@ describe("applyModelAudit", () => {
   });
 });
 
+const buildTestWords = () =>
+  "a limited partnership is preferable method of owning investment property because".split(" ");
+
 describe("dedupeNearDuplicates", () => {
   const opts = (texts: string[]) => texts.map((text, i) => ({ id: "ABCD"[i] as "A", text }));
   const base = {
@@ -202,6 +205,23 @@ describe("dedupeNearDuplicates", () => {
     expect(result.questions).toHaveLength(1);
     expect(result.questions[0].contentHash).toBe("b");
     expect(result.removedCount).toBe(1);
+  });
+
+  it("prefers the copy with fewer unreadable words even when the other one has an explanation", () => {
+    const damaged = materialQuestionFixture({
+      ...base, contentHash: "damaged",
+      question: "A limited partnership is a preferable methd of owning investment property because:",
+      answerExplanation: "Limited partners risk only what they invest.",
+    });
+    const clean = materialQuestionFixture({ ...base, contentHash: "clean", answerExplanation: null });
+    const known = new Set(buildTestWords());
+    const damageOf = (question: { question: string }) =>
+      (question.question.toLowerCase().match(/[a-z]{3,}/g) || []).filter((word) => !known.has(word)).length;
+
+    const result = dedupeNearDuplicates([damaged, clean], damageOf);
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].contentHash).toBe("clean");
   });
 
   it("treats a truncated copy of the same answer as compatible", () => {

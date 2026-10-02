@@ -64,9 +64,19 @@ function optionLength(question: MaterialQuestion): number {
   return question.options.reduce((total, option) => total + option.text.length, 0);
 }
 
-function betterCopy(a: MaterialQuestion, b: MaterialQuestion): MaterialQuestion {
-  const keyA = [servableRank(a), a.repairFlags.length, a.answerExplanation ? 0 : 1, -optionLength(a)];
-  const keyB = [servableRank(b), b.repairFlags.length, b.answerExplanation ? 0 : 1, -optionLength(b)];
+// Among copies of one question: servable first, then the one with fewer
+// unreadable words (a relative measure, so gaps in the word list cancel out),
+// then fewer flags, an explanation, and the more complete options.
+function betterCopy(a: MaterialQuestion, b: MaterialQuestion, damageOf: (question: MaterialQuestion) => number): MaterialQuestion {
+  const rank = (question: MaterialQuestion) => [
+    servableRank(question),
+    damageOf(question),
+    question.repairFlags.length,
+    question.answerExplanation ? 0 : 1,
+    -optionLength(question),
+  ];
+  const keyA = rank(a);
+  const keyB = rank(b);
   for (let i = 0; i < keyA.length; i++) {
     if (keyA[i] !== keyB[i]) return keyA[i] < keyB[i] ? a : b;
   }
@@ -76,7 +86,7 @@ function betterCopy(a: MaterialQuestion, b: MaterialQuestion): MaterialQuestion 
 // Collapses repeated copies of the same question (the same book scanned more
 // than once). Copies whose keyed answers disagree are never resolved by guess:
 // the surviving record goes to user review.
-export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
+export function dedupeNearDuplicates(questions: MaterialQuestion[], damageOf: (question: MaterialQuestion) => number = () => 0) {
   // Cluster by identical option set, then by similar prompt wording. Questions
   // without a reliable option signature stay on their own.
   const clusters: { members: MaterialQuestion[]; words: Set<string>; first: number }[] = [];
@@ -99,7 +109,7 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
   let conflictCount = 0;
   const ordered = clusters.map(({ members: group }) => {
     removedCount += group.length - 1;
-    let best = group.reduce(betterCopy);
+    let best = group.reduce((a, b) => betterCopy(a, b, damageOf));
     const answers = group.map((member) => ({ key: keyedAnswerText(member), text: rawKeyedText(member) }));
     const reference = { key: keyedAnswerText(best), text: rawKeyedText(best) };
     const conflicting = answers.some((answer) => !answersCompatible(answer.key, reference.key, answer.text, reference.text));
@@ -212,7 +222,11 @@ export function mergeQuestionBanks(
   const garbled = options.isKnownWord
     ? flagGarbledQuestions(normalized.questions, options.isKnownWord, dedupeNearDuplicates(normalized.questions).questions)
     : { questions: normalized.questions, flaggedCount: 0 };
-  const deduped = dedupeNearDuplicates(garbled.questions);
+  const isKnownWord = options.isKnownWord;
+  const damageOf = isKnownWord
+    ? (question: MaterialQuestion) => wordsOf(question).filter((word) => !isKnownWord(word.toLowerCase())).length
+    : undefined;
+  const deduped = dedupeNearDuplicates(garbled.questions, damageOf);
   return {
     questions: deduped.questions,
     duplicateCount: duplicateCount + deduped.removedCount,
