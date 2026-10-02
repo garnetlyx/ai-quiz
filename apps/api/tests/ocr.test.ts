@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectOcrColumnSplit, parseTsv, reorderColumnMajor } from "../src/services/ocr.js";
+import { detectOcrColumnSplit, parseTsv, reorderBanded, reorderColumnMajor } from "../src/services/ocr.js";
 
 const header = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
 
@@ -49,3 +49,44 @@ describe("Tesseract source extraction", () => {
     expect(reorderColumnMajor(parseTsv(tsv))).toBe("74. Question\ncontinued");
   });
 });
+
+describe("reorderBanded", () => {
+  const word = (text: string, left: number, top: number, width = 60) => `5\t1\t1\t1\t1\t1\t${left}\t${top}\t${width}\t12\t96\t${text}`;
+  const page = (rows: string[]) => parseTsv([header, ...rows].join("\n"));
+
+  it("reads full-width text first, then a two-column band as left column then right column", () => {
+    const rows: string[] = [];
+    // Three full-width lines; each has a word that straddles the page middle (x=500).
+    for (let i = 0; i < 3; i++) rows.push(word(`Body${i}`, 100, 100 + i * 20, 200), word(`wide${i}`, 330, 100 + i * 20, 340), word(`end${i}`, 700, 100 + i * 20, 200));
+    // Six two-column lines below: left column x 100-450, right column x 550-900.
+    for (let i = 0; i < 6; i++) rows.push(word(`L${i}`, 100, 200 + i * 20, 200), word(`R${i}`, 550, 200 + i * 20, 200));
+
+    expect(reorderBanded(page(rows)).split("\n")).toEqual([
+      "Body0 wide0 end0", "Body1 wide1 end1", "Body2 wide2 end2",
+      "L0", "L1", "L2", "L3", "L4", "L5",
+      "R0", "R1", "R2", "R3", "R4", "R5",
+    ]);
+  });
+
+  it("keeps a two-column band that sits between full-width text above and below", () => {
+    const rows: string[] = [];
+    for (let i = 0; i < 2; i++) rows.push(word(`Top${i}`, 100, 100 + i * 20, 800));
+    for (let i = 0; i < 5; i++) rows.push(word(`L${i}`, 100, 160 + i * 20, 200), word(`R${i}`, 550, 160 + i * 20, 200));
+    rows.push(word("Bottom", 100, 300, 800));
+
+    const lines = reorderBanded(page(rows)).split("\n");
+    expect(lines).toEqual(["Top0", "Top1", "L0", "L1", "L2", "L3", "L4", "R0", "R1", "R2", "R3", "R4", "Bottom"]);
+  });
+
+  it("leaves an ordinary single-column page in reading order", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => word(`Line${i}`, 100, 100 + i * 20, 700));
+    expect(reorderBanded(page(rows)).split("\n")).toEqual(Array.from({ length: 8 }, (_, i) => `Line${i}`));
+  });
+
+  it("does not split a short list that only has text on the left", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => word(`Item${i}`, 100, 100 + i * 20, 200));
+    rows.push(word("Footer", 100, 300, 800));
+    expect(reorderBanded(page(rows)).split("\n")).toEqual([...Array.from({ length: 8 }, (_, i) => `Item${i}`), "Footer"]);
+  });
+});
+

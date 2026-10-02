@@ -228,6 +228,79 @@ function linesFromBoxes(boxes: OcrWordBox[]): string[] {
   );
 }
 
+const BAND_MIN_ROWS = 4;
+const BAND_MIN_TWO_SIDED_ROWS = 3;
+const ROW_TOLERANCE_OF_HEIGHT = 0.6;
+const GUTTER_HALF_WIDTH_OF_HEIGHT = 0.5;
+const GUTTER_MIN_FRACTION_OF_WIDTH = 0.01;
+
+function clusterRows(boxes: OcrWordBox[], tolerance: number): OcrWordBox[][] {
+  const sorted = [...boxes].sort((a, b) => (a.top + a.bottom) - (b.top + b.bottom) || a.left - b.left);
+  const rows: { words: OcrWordBox[]; center: number }[] = [];
+  for (const box of sorted) {
+    const center = (box.top + box.bottom) / 2;
+    const row = rows[rows.length - 1];
+    if (row && Math.abs(center - row.center) <= tolerance) {
+      row.words.push(box);
+      row.center = (row.center * (row.words.length - 1) + center) / row.words.length;
+    } else {
+      rows.push({ words: [box], center });
+    }
+  }
+  return rows.map((row) => row.words.sort((a, b) => a.left - b.left));
+}
+
+/**
+ * Reading order for pages that mix full-width text with two-column bands
+ * (a chapter's body text above a two-column "Sample Questions" box). Tesseract
+ * merges the two columns of a band into single lines, so the decision is made
+ * per horizontal band from word geometry: a run of rows with a clear gutter and
+ * text on both sides is read left column then right column; everything else is
+ * read top to bottom.
+ */
+export function reorderBanded(boxes: OcrWordBox[]): string {
+  if (boxes.length === 0) return "";
+  const heights = boxes.map((box) => box.bottom - box.top).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
+  const tolerance = medianHeight * ROW_TOLERANCE_OF_HEIGHT;
+  const minLeft = Math.min(...boxes.map((box) => box.left));
+  const maxRight = Math.max(...boxes.map((box) => box.right));
+  const mid = (minLeft + maxRight) / 2;
+  const zone = Math.max(medianHeight * GUTTER_HALF_WIDTH_OF_HEIGHT, (maxRight - minLeft) * GUTTER_MIN_FRACTION_OF_WIDTH);
+  const crossesGutter = (box: OcrWordBox) => box.left < mid + zone && box.right > mid - zone;
+  const center = (box: OcrWordBox) => (box.left + box.right) / 2;
+  const text = (row: OcrWordBox[]) => row.map((box) => box.text).join(" ");
+
+  const rows = clusterRows(boxes, tolerance).map((row) => ({
+    row,
+    split: !row.some(crossesGutter),
+    twoSided: row.some((box) => center(box) < mid) && row.some((box) => center(box) >= mid),
+  }));
+
+  const lines: string[] = [];
+  let index = 0;
+  while (index < rows.length) {
+    if (!rows[index].split) {
+      lines.push(text(rows[index].row));
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (end < rows.length && rows[end].split) end += 1;
+    const run = rows.slice(index, end);
+    const isBand = run.length >= BAND_MIN_ROWS && run.filter((entry) => entry.twoSided).length >= BAND_MIN_TWO_SIDED_ROWS;
+    if (isBand) {
+      const words = run.flatMap((entry) => entry.row);
+      const columns = [words.filter((box) => center(box) < mid), words.filter((box) => center(box) >= mid)];
+      for (const column of columns) lines.push(...clusterRows(column, tolerance).map(text));
+    } else {
+      for (const entry of run) lines.push(text(entry.row));
+    }
+    index = end;
+  }
+  return lines.join("\n");
+}
+
 /** Find an empty central gutter between substantial, non-overlapping columns. */
 export function detectOcrColumnSplit(boxes: OcrWordBox[]): number | null {
   const lines = groupSourceLines(boxes).filter((line) =>
@@ -259,7 +332,8 @@ export function detectOcrColumnSplit(boxes: OcrWordBox[]): number | null {
 
 async function readTesseractColumns(image: Buffer, boxes: OcrWordBox[]): Promise<string> {
   const split = detectOcrColumnSplit(boxes);
-  if (split === null) return reorderColumnMajor(boxes);
+  // Mixed pages (full-width text plus a two-column band) are read band by band.
+  if (split === null) return reorderBanded(boxes);
   const { width, height } = await sharp(image).metadata();
   if (!width || !height || split <= 0 || split >= width) throw new Error("Invalid OCR image geometry");
   const parts: string[] = [];
