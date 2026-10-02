@@ -9,6 +9,7 @@ export interface MergedQuestionBank {
   duplicateCount: number;
   normalizedCount: number;
   conflictCount: number;
+  garbledCount: number;
 }
 
 const alnum = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -87,10 +88,71 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
   return { questions: ordered, removedCount, conflictCount };
 }
 
+const GARBLE_WORD = /(?<![A-Za-z'’])[A-Za-z]{4,}(?![A-Za-z'’])/g;
+const GARBLE_MIN_UNKNOWN_WORDS = 2;
+const INFLECTION_SUFFIXES = ["s", "es", "ed", "d", "ing", "ly", "er", "ers", "al", "ation", "ment"];
+
+// A word counts as known if the list has it or a simple inflection of it.
+export function buildKnownWordPredicate(words: Set<string>): (word: string) => boolean {
+  return (word) => {
+    if (words.has(word)) return true;
+    for (const suffix of INFLECTION_SUFFIXES) {
+      if (!word.endsWith(suffix)) continue;
+      const stem = word.slice(0, -suffix.length);
+      if (words.has(stem) || words.has(`${stem}e`)) return true;
+    }
+    return word.endsWith("ies") && words.has(`${word.slice(0, -3)}y`);
+  };
+}
+
+function wordsOf(question: MaterialQuestion): string[] {
+  return [question.question, ...question.options.map((option) => option.text)]
+    .flatMap((text) => text.normalize("NFKC").match(GARBLE_WORD) || []);
+}
+
+// OCR garbage is made of words that are neither real words nor repeated
+// anywhere else in the bank. Rare real vocabulary is in the word list, names
+// are capitalized, and recurring terms appear in more than one record.
+export function flagGarbledQuestions(questions: MaterialQuestion[], isKnownWord: (word: string) => boolean) {
+  const recordCount = new Map<string, number>();
+  for (const question of questions) {
+    const seen = new Set([
+      ...wordsOf(question),
+      ...((question.answerExplanation || "").normalize("NFKC").match(GARBLE_WORD) || []),
+    ].map((word) => word.toLowerCase()));
+    for (const word of seen) recordCount.set(word, (recordCount.get(word) || 0) + 1);
+  }
+
+  let flaggedCount = 0;
+  const result = questions.map((question) => {
+    if (!isServableMaterialQuestion(question)) return question;
+    const unknown = wordsOf(question).filter((word) =>
+      word[0] === word[0].toLowerCase() &&
+      (recordCount.get(word.toLowerCase()) || 0) <= 1 &&
+      !isKnownWord(word.toLowerCase()));
+    if (unknown.length < GARBLE_MIN_UNKNOWN_WORDS) return question;
+    flaggedCount += 1;
+    return {
+      ...question,
+      reviewStatus: "needs_repair" as const,
+      repairFlags: [...question.repairFlags, "explicit_ocr_layout_pollution" as const],
+      repairActions: [...question.repairActions, {
+        type: "garbled_text_check",
+        status: "failed" as const,
+        note: `Text contains words that are neither real words nor repeated elsewhere: ${[...new Set(unknown)].slice(0, 8).join(", ")}.`,
+      }],
+    };
+  });
+  return { questions: result, flaggedCount };
+}
+
 // Merges independently extracted banks into one, keeping the first occurrence
 // of each content hash so caller order defines precedence, then repairs
 // deterministic OCR text damage and collapses repeated scans of a question.
-export function mergeQuestionBanks(banks: MaterialQuestion[][]): MergedQuestionBank {
+export function mergeQuestionBanks(
+  banks: MaterialQuestion[][],
+  options: { isKnownWord?: (word: string) => boolean } = {}
+): MergedQuestionBank {
   const seen = new Set<string>();
   const unique: MaterialQuestion[] = [];
   let duplicateCount = 0;
@@ -105,12 +167,17 @@ export function mergeQuestionBanks(banks: MaterialQuestion[][]): MergedQuestionB
     }
   }
   const normalized = normalizeBankText(unique);
-  const deduped = dedupeNearDuplicates(normalized.questions);
+  // Garbled copies are excluded before dedup so a clean duplicate copy wins.
+  const garbled = options.isKnownWord
+    ? flagGarbledQuestions(normalized.questions, options.isKnownWord)
+    : { questions: normalized.questions, flaggedCount: 0 };
+  const deduped = dedupeNearDuplicates(garbled.questions);
   return {
     questions: deduped.questions,
     duplicateCount: duplicateCount + deduped.removedCount,
     normalizedCount: normalized.changedCount,
     conflictCount: deduped.conflictCount,
+    garbledCount: garbled.flaggedCount,
   };
 }
 

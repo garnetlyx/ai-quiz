@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   applyModelAudit,
   buildScopeFromQuestions,
+  buildKnownWordPredicate,
   dedupeNearDuplicates,
+  flagGarbledQuestions,
   materialAuditFingerprint,
   mergeQuestionBanks,
   type MaterialAuditRecord,
@@ -253,5 +255,46 @@ describe("mergeQuestionBanks normalization", () => {
 
     expect(merged.questions.filter((q) => q.question.startsWith("A listing agent owes"))).toHaveLength(1);
     expect(merged.duplicateCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("flagGarbledQuestions", () => {
+  const words = new Set(["property", "manager", "monthly", "payment", "conditioner", "which", "loan", "borrower", "interest", "formaldehyde", "fumes", "insulation", "banned", "release", "house", "type", "what", "from", "that", "this", "with", "were"]);
+  const isKnownWord = buildKnownWordPredicate(words);
+
+  const make = (question: string, hash: string, extra = {}) => materialQuestionFixture({ question, contentHash: hash, ...extra });
+
+  it("routes a question with several unknown one-off words to needs_repair", () => {
+    const garbled = make("The mortgage agslare idierestand theassome records the assignment to the borrower", "g");
+    const result = flagGarbledQuestions([garbled, make("What type of house insulation was banned", "ok")], isKnownWord);
+
+    expect(result.questions[0].reviewStatus).toBe("needs_repair");
+    expect(result.questions[0].repairFlags).toContain("explicit_ocr_layout_pollution");
+    expect(result.questions[0].repairActions.at(-1)?.note).toContain("agslare");
+    expect(result.flaggedCount).toBe(1);
+  });
+
+  it("keeps rare but real vocabulary and capitalized names servable", () => {
+    const rare = make("What release of formaldehyde fumes made the Hannah insulation banned", "r");
+    expect(flagGarbledQuestions([rare], isKnownWord).questions[0].reviewStatus).toBe("ready");
+  });
+
+  it("does not flag an unknown word that repeats across the bank", () => {
+    const one = make("The tempworks lease and the supertemps lease", "t1");
+    const two = make("The tempworks lease and the supertemps payment", "t2");
+    const result = flagGarbledQuestions([one, two], isKnownWord);
+    expect(result.flaggedCount).toBe(0);
+  });
+
+  it("accepts simple inflections of known words", () => {
+    expect(isKnownWord("payments")).toBe(true);
+    expect(isKnownWord("borrowers")).toBe(true);
+    expect(isKnownWord("agslare")).toBe(false);
+  });
+
+  it("leaves excluded questions untouched", () => {
+    const garbled = make("The mortgage agslare idierestand theassome records", "x", { reviewStatus: "needs_repair" });
+    const result = flagGarbledQuestions([garbled], isKnownWord);
+    expect(result.questions[0].repairFlags).toEqual([]);
   });
 });

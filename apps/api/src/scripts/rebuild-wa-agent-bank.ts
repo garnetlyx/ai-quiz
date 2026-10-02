@@ -8,6 +8,7 @@ import { buildMaterialQuestionVerifier } from "../services/materialVerification.
 import { extractPdfLayoutText } from "../services/pdfLayoutText.js";
 import {
   applyModelAudit,
+  buildKnownWordPredicate,
   buildReviewItems,
   mergeQuestionBanks,
   type MaterialAuditRecord,
@@ -20,6 +21,7 @@ const DEFAULT_OUTPUT_DIR = "data/wa-agent/export";
 const PRACTICE_TESTS_LABEL = "data/wa-agent/4-exams";
 const DEFAULT_OVERRIDES_FILE = "data/wa-agent/export/verified-answer-overrides.json";
 const DEFAULT_MODEL_AUDIT_FILE = "data/wa-agent/export/model-audit.json";
+const DEFAULT_WORDLIST = "/usr/share/dict/words";
 
 function repoRoot(): string {
   return path.resolve(process.cwd(), "../..");
@@ -105,7 +107,11 @@ async function main() {
     });
   }
 
-  const merged = mergeQuestionBanks(banks);
+  // A word list lets the merge route unreadable OCR garbage out of the quiz pool.
+  const wordListPath = process.env.MATERIAL_WORDLIST || DEFAULT_WORDLIST;
+  if (!existsSync(wordListPath)) throw new Error(`Word list not found at ${wordListPath}; set MATERIAL_WORDLIST`);
+  const wordList = new Set((await readFile(wordListPath, "utf8")).split("\n").map((word) => word.trim().toLowerCase()));
+  const merged = mergeQuestionBanks(banks, { isKnownWord: buildKnownWordPredicate(wordList) });
   let questions = merged.questions.map((question) => ({
     ...question,
     reviewStatus: validatedReviewStatus(question),
