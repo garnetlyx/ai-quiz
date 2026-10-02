@@ -62,8 +62,12 @@ AI-powered exam prep web app. Users describe their target exam in plain text, an
 
 ### Testing
 ```bash
-npm run test --workspace=apps/api
+npm test
 ```
+
+API tests run against a separate `<configured database>_test` on the same server
+(created and migrated automatically, emptied at the start of each run), so they
+never touch development data. Web tests cover its pure helpers.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details.
 
