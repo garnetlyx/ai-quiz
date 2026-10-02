@@ -317,14 +317,14 @@ export interface ImportMaterialQuestionsResult {
   jobId: string;
   insertedCount: number;
   skippedCount: number;
-  deactivatedCount: number;
+  replacedCount: number;
   removedCollisionCount: number;
   scopeBuilt: boolean;
 }
 
 // Imports pre-extracted material questions into a topic. With replaceExisting,
-// the topic's active questions are retired first; hash-colliding rows are
-// removed so the incoming set lands cleanly. With buildScope, an empty topic
+// the topic's active questions are deleted first (user-excluded rows stay
+// excluded) so the incoming set replaces the bank without leftovers. With buildScope, an empty topic
 // scope is derived from the questions' own chapter metadata (an existing
 // curated scope is never overwritten).
 export async function importMaterialQuestions(params: ImportMaterialQuestionsParams): Promise<ImportMaterialQuestionsResult> {
@@ -360,18 +360,19 @@ export async function importMaterialQuestions(params: ImportMaterialQuestionsPar
     })
     .returning();
 
-  let deactivatedCount = 0;
+  let replacedCount = 0;
   let removedCollisionCount = 0;
   if (replaceExisting) {
-    const deactivated = await db
-      .update(materialQuestions)
-      .set({ active: false })
+    // The incoming set replaces the active bank outright; retired copies are not
+    // kept. Rows the user excluded (inactive) stay excluded.
+    const replaced = await db
+      .delete(materialQuestions)
       .where(and(eq(materialQuestions.topicId, topic.id), eq(materialQuestions.active, true)))
       .returning({ id: materialQuestions.id });
-    deactivatedCount = deactivated.length;
+    replacedCount = replaced.length;
 
-    // Rows whose hash collides with the incoming set would silently block the
-    // fresh inserts via the (topic_id, content_hash) unique index; retire them.
+    // Excluded rows whose hash collides with the incoming set would silently
+    // block the fresh inserts via the (topic_id, content_hash) unique index.
     const incomingHashes = questions
       .map((question) => question.contentHash)
       .filter(Boolean) as string[];
@@ -403,7 +404,7 @@ export async function importMaterialQuestions(params: ImportMaterialQuestionsPar
     jobId: job.id,
     insertedCount,
     skippedCount: questions.length - insertedCount,
-    deactivatedCount,
+    replacedCount,
     removedCollisionCount,
     scopeBuilt,
   };
