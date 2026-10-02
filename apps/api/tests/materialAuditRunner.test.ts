@@ -30,10 +30,11 @@ const prompt = process.argv.at(-1);
 if (!prompt.includes('Offline topic context')) process.exit(3);
 const items = JSON.parse(prompt.split('ITEMS:\\n')[1]);
 if (process.env.FAKE_MODEL_FAILURE && items.some(item => item.question.startsWith('Question 0:'))) process.exit(7);
-console.log(JSON.stringify(items.map(item => ({ n: item.n, complete: true, optionsClean: true, modelAnswer: 'B', keyVerdict: 'correct', explanationMatches: true, issues: [] }))));
+const answered = process.env.FAKE_MODEL_TRUNCATE ? items.slice(0, 1) : items;
+console.log(JSON.stringify(answered.map(item => ({ n: item.n, complete: true, optionsClean: true, modelAnswer: 'B', keyVerdict: 'correct', explanationMatches: true, issues: [] }))));
 `);
   const command = `${process.execPath} ${model}`;
-  const run = async (extraArgs: string[] = [], failure = false) => {
+  const run = async (extraArgs: string[] = [], failure = false, truncate = false) => {
     try {
       const result = await execFileAsync(process.execPath, [
         "--import", "tsx", "src/scripts/audit-material-bank.ts",
@@ -41,7 +42,7 @@ console.log(JSON.stringify(items.map(item => ({ n: item.n, complete: true, optio
         "--topic-description=Offline topic context", "--batch-size=1", ...extraArgs,
       ], {
         cwd: path.resolve(import.meta.dirname, ".."),
-        env: { ...process.env, DATABASE_URL: "postgres://invalid:invalid@127.0.0.1:1/invalid", FAKE_MODEL_FAILURE: failure ? "1" : "" },
+        env: { ...process.env, DATABASE_URL: "postgres://invalid:invalid@127.0.0.1:1/invalid", FAKE_MODEL_FAILURE: failure ? "1" : "", FAKE_MODEL_TRUNCATE: truncate ? "1" : "" },
         timeout: 20_000,
       });
       return { ...result, code: 0 };
@@ -74,6 +75,14 @@ describe("material audit runner", () => {
     expect(resumed.code, resumed.stderr).toBe(0);
     expect(resumed.stdout).toContain('"auditedThisRun": 1');
     expect(JSON.parse(await readFile(output, "utf8"))).toHaveLength(3);
+  });
+
+  it("keeps the verdicts a truncated answer did contain and asks again only for the rest", async () => {
+    const { run, output } = await setup(4);
+    const result = await run(["--batch-size=4", "--concurrency=1"], false, true);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain('"failedThisRun": 0');
+    expect(JSON.parse(await readFile(output, "utf8"))).toHaveLength(4);
   });
 
   it("persists every concurrent batch and leaves no temporary cache files", async () => {

@@ -16,6 +16,7 @@ import {
   type MaterialAuditRecord,
   type MaterialAuditVerdict,
 } from "../services/materialBank.js";
+import { parseAuditVerdicts } from "../services/materialAuditParse.js";
 import type { MaterialQuestion } from "../services/materialExtraction.js";
 
 const DEFAULT_INPUT = "data/wa-agent/export/material-questions.json";
@@ -90,35 +91,6 @@ function runModel(command: string, prompt: string, timeoutMs: number): Promise<s
   });
 }
 
-const LETTERS = new Set(["A", "B", "C", "D"]);
-
-function parseVerdicts(stdout: string, count: number): MaterialAuditVerdict[] {
-  const start = stdout.indexOf("[");
-  const end = stdout.lastIndexOf("]");
-  if (start < 0 || end <= start) throw new Error("no JSON array in model output");
-  const parsed = JSON.parse(stdout.slice(start, end + 1)) as Record<string, unknown>[];
-  if (!Array.isArray(parsed) || parsed.length !== count) {
-    throw new Error(`expected ${count} verdicts, got ${Array.isArray(parsed) ? parsed.length : "non-array"}`);
-  }
-  return parsed.map((raw, index) => {
-    if (raw.n !== index + 1) throw new Error(`verdict ${index + 1} has n=${String(raw.n)}`);
-    if (typeof raw.complete !== "boolean" || typeof raw.optionsClean !== "boolean") {
-      throw new Error(`verdict ${index + 1} missing complete/optionsClean`);
-    }
-    if (!["correct", "wrong", "unsure"].includes(raw.keyVerdict as string)) {
-      throw new Error(`verdict ${index + 1} has keyVerdict=${String(raw.keyVerdict)}`);
-    }
-    return {
-      complete: raw.complete,
-      optionsClean: raw.optionsClean,
-      modelAnswer: LETTERS.has(raw.modelAnswer as string) ? (raw.modelAnswer as MaterialAuditVerdict["modelAnswer"]) : null,
-      keyVerdict: raw.keyVerdict as MaterialAuditVerdict["keyVerdict"],
-      explanationMatches: typeof raw.explanationMatches === "boolean" ? raw.explanationMatches : null,
-      issues: Array.isArray(raw.issues) ? raw.issues.map(String) : [],
-    };
-  });
-}
-
 function toAuditItem(question: MaterialQuestion, n: number): MaterialAuditItem {
   return {
     n,
@@ -186,7 +158,7 @@ async function main() {
         let stdout = "";
         try {
           stdout = await runModel(command, prompt, timeoutMs);
-          verdicts = parseVerdicts(stdout, batch.length);
+          verdicts = parseAuditVerdicts(stdout, batch.length);
         } catch (error) {
           const rawPath = path.join(os.tmpdir(), `material-audit-failed-${Date.now()}.txt`);
           if (stdout) await writeFile(rawPath, stdout);
@@ -198,11 +170,14 @@ async function main() {
         continue;
       }
       const auditedAt = new Date().toISOString();
-      batch.forEach((question, i) => {
-        const fingerprint = materialAuditFingerprint(question);
-        cache.set(fingerprint, { fingerprint, promptVersion: MATERIAL_AUDIT_PROMPT_VERSION, command, auditedAt, verdict: verdicts![i] });
+      verdicts.forEach((verdict, i) => {
+        const fingerprint = materialAuditFingerprint(batch[i]);
+        cache.set(fingerprint, { fingerprint, promptVersion: MATERIAL_AUDIT_PROMPT_VERSION, command, auditedAt, verdict });
       });
-      done += batch.length;
+      done += verdicts.length;
+      // The model sometimes stops mid-array; the verdicts it did finish are kept
+      // and only the rest is asked again.
+      if (verdicts.length < batch.length) batches.push(batch.slice(verdicts.length));
       await save();
       console.error(`[audit] ${done}/${pending.length} audited, ${failed} failed`);
     }
