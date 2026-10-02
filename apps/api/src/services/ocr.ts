@@ -17,10 +17,12 @@ import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import sharp from "sharp";
 
 const execFileAsync = promisify(execFile);
 
 export interface OcrWordBox {
+  sourceLine: string;
   left: number;
   top: number;
   right: number;
@@ -139,7 +141,7 @@ export function parseTsv(tsv: string): OcrWordBox[] {
     if (!line.trim()) continue;
     const cols = line.split("\t");
     if (cols.length < 12) continue;
-    const level = Number(cols[4]);
+    const level = Number(cols[0]);
     if (level !== 5) continue; // only word rows
     const conf = Number(cols[10]);
     if (!Number.isFinite(conf) || conf < 0) continue;
@@ -150,7 +152,10 @@ export function parseTsv(tsv: string): OcrWordBox[] {
     const width = Number(cols[8]);
     const height = Number(cols[9]);
     if (![left, top, width, height].every(Number.isFinite)) continue;
-    boxes.push({ left, top, right: left + width, bottom: top + height, text: text.trim() });
+    boxes.push({
+      sourceLine: cols.slice(1, 5).join(":"),
+      left, top, right: left + width, bottom: top + height, text: text.trim(),
+    });
   }
   return boxes;
 }
@@ -167,12 +172,17 @@ export function reorderColumnMajor(boxes: OcrWordBox[]): string {
 
   const maxRight = boxes.reduce((m, b) => (b.right > m ? b.right : m), 0);
   if (maxRight === 0) return boxes.map((b) => b.text).join(" ");
-  const mid = maxRight / 2;
+  const minLeft = boxes.reduce((m, b) => Math.min(m, b.left), Infinity);
+  const mid = (minLeft + maxRight) / 2;
+
+  // Tesseract supplies line identity. Keep whole lines together; splitting
+  // individual words at the midpoint truncates long left-column prompts.
+  const sourceLines = groupSourceLines(boxes);
 
   // Only treat as two-column when there is a clear gutter: substantial word
   // mass on both sides of the midpoint.
-  const left = boxes.filter((b) => b.right < mid || b.left + (b.right - b.left) / 2 < mid);
-  const right = boxes.filter((b) => b.left >= mid && b.left + (b.right - b.left) / 2 >= mid);
+  const left = sourceLines.filter((line) => Math.min(...line.map((b) => b.left)) < mid).flat();
+  const right = sourceLines.filter((line) => Math.min(...line.map((b) => b.left)) >= mid).flat();
   const useTwoColumn = left.length >= 3 && right.length >= 3;
 
   if (!useTwoColumn) {
@@ -181,28 +191,88 @@ export function reorderColumnMajor(boxes: OcrWordBox[]): string {
   return [...linesFromBoxes(left), ...linesFromBoxes(right)].join("\n");
 }
 
-/** Group boxes into visual lines by y-proximity, then sort each line by x. */
+function groupSourceLines(boxes: OcrWordBox[]): OcrWordBox[][] {
+  const lines = new Map<string, OcrWordBox[]>();
+  for (const box of boxes) {
+    const line = lines.get(box.sourceLine) || [];
+    line.push(box);
+    lines.set(box.sourceLine, line);
+  }
+  return [...lines.values()].sort((a, b) =>
+    Math.min(...a.map((box) => box.top)) - Math.min(...b.map((box) => box.top)) ||
+    Math.min(...a.map((box) => box.left)) - Math.min(...b.map((box) => box.left))
+  );
+}
+
+/** Use source line IDs; y-distance merges tightly spaced question/option lines. */
 function linesFromBoxes(boxes: OcrWordBox[]): string[] {
-  if (boxes.length === 0) return [];
-  const sorted = [...boxes].sort((a, b) => a.top - b.top || a.left - b.left);
   const lines: OcrWordBox[][] = [];
-  let current: OcrWordBox[] = [];
-  let currentTop = sorted[0].top;
-  for (const box of sorted) {
-    const tolerance = Math.max((box.bottom - box.top) * 1.5, 6);
-    if (current.length === 0 || Math.abs(box.top - currentTop) <= tolerance) {
-      current.push(box);
-      if (current.length === 1) currentTop = box.top;
+  for (const fragment of groupSourceLines(boxes)) {
+    const previous = lines[lines.length - 1];
+    const top = Math.min(...fragment.map((box) => box.top));
+    const bottom = Math.max(...fragment.map((box) => box.bottom));
+    const previousTop = previous && Math.min(...previous.map((box) => box.top));
+    const previousBottom = previous && Math.max(...previous.map((box) => box.bottom));
+    // Number/letter labels are sometimes separate Tesseract blocks. Merge
+    // only fragments sharing a baseline, never adjacent printed lines.
+    if (previous && previousTop !== undefined && previousBottom !== undefined &&
+        Math.abs((top + bottom) - (previousTop + previousBottom)) <=
+          Math.min(bottom - top, previousBottom - previousTop)) {
+      previous.push(...fragment);
     } else {
-      if (current.length) lines.push(current);
-      current = [box];
-      currentTop = box.top;
+      lines.push([...fragment]);
     }
   }
-  if (current.length) lines.push(current);
   return lines.map((line) =>
     line.sort((a, b) => a.left - b.left).map((b) => b.text).join(" ")
   );
+}
+
+/** Find an empty central gutter between substantial, non-overlapping columns. */
+export function detectOcrColumnSplit(boxes: OcrWordBox[]): number | null {
+  const lines = groupSourceLines(boxes).filter((line) =>
+    !/^\d+[.]?$/.test(line.map((box) => box.text).join(" "))
+  ).map((line) => ({
+    left: Math.min(...line.map((box) => box.left)),
+    right: Math.max(...line.map((box) => box.right)),
+    top: Math.min(...line.map((box) => box.top)),
+    bottom: Math.max(...line.map((box) => box.bottom)),
+  }));
+  if (lines.length < num("OCR_COLUMN_MIN_LINES", 6)) return null;
+  // An isolated running header can span both columns; body text cannot.
+  if (lines[1].top - lines[0].bottom > (lines[0].bottom - lines[0].top) * 2) lines.shift();
+  const left = Math.min(...lines.map((line) => line.left));
+  const right = Math.max(...lines.map((line) => line.right));
+  const middle = (left + right) / 2;
+  const leftLines = lines.filter((line) => line.right < middle);
+  const rightLines = lines.filter((line) => line.left > middle);
+  const required = Math.ceil(lines.length * num("OCR_COLUMN_MIN_FRACTION", 0.25));
+  if (leftLines.length < required || rightLines.length < required) return null;
+  // Refuse mixed single-/two-column pages. A crop must never bisect body text.
+  if (leftLines.length + rightLines.length !== lines.length) return null;
+  const gutterStart = Math.max(...leftLines.map((line) => line.right));
+  const gutterEnd = Math.min(...rightLines.map((line) => line.left));
+  const heights = lines.map((line) => line.bottom - line.top).sort((a, b) => a - b);
+  if (gutterEnd - gutterStart < heights[Math.floor(heights.length / 2)]) return null;
+  return Math.round((gutterStart + gutterEnd) / 2);
+}
+
+async function readTesseractColumns(image: Buffer, boxes: OcrWordBox[]): Promise<string> {
+  const split = detectOcrColumnSplit(boxes);
+  if (split === null) return reorderColumnMajor(boxes);
+  const { width, height } = await sharp(image).metadata();
+  if (!width || !height || split <= 0 || split >= width) throw new Error("Invalid OCR image geometry");
+  const parts: string[] = [];
+  for (const crop of [
+    { left: 0, top: 0, width: split, height },
+    { left: split, top: 0, width: width - split, height },
+  ]) {
+    const column = await sharp(image).extract(crop).png().toBuffer();
+    // Each detected column is one text block. PSM 3 on a whole page can
+    // discard answer-label strips as noise (Wa-agent3.pdf, page 14).
+    parts.push(linesFromBoxes(await ocrImageTesseract(column, 6)).join("\n"));
+  }
+  return parts.join("\n");
 }
 
 function getLlmModel(): string {
@@ -318,7 +388,7 @@ export async function ocrImage(
 
   if (!tesseractAvailable()) return "";
   const boxes = await ocrImageTesseract(image, opts.psm);
-  return reorderColumnMajor(boxes);
+  return readTesseractColumns(image, boxes);
 }
 
 /**
@@ -371,4 +441,3 @@ export async function ocrImageFile(filePath: string, opts: OcrOptions = {}): Pro
 }
 
 // readFile is imported at top; this avoids a circular re-import quirk.
-
