@@ -73,6 +73,20 @@ describe("normalizeQuestionText", () => {
     expect(normalizeQuestionText("Arms-length transaction", withRms)).toBe("Arms-length transaction");
   });
 
+  it("drops trailing ligature debris left at the end of a text", () => {
+    expect(normalizeQuestionText("D. unilateral contract fl", vocabulary)).toBe("D. unilateral contract");
+    expect(normalizeQuestionText("net listing fl fi", vocabulary)).toBe("net listing");
+    expect(normalizeQuestionText("the property is sold fl fi", vocabulary)).toBe("the property is sold");
+  });
+
+  it("drops a stray CJK glyph inside English text", () => {
+    expect(normalizeQuestionText("because the 丹 owner installed them", vocabulary)).toBe("because the owner installed them");
+  });
+
+  it("strips a leading question number followed by a comma", () => {
+    expect(normalizeQuestionText("124, A person who represents a brokerage", vocabulary)).toBe("A person who represents a brokerage");
+  });
+
   it("does not touch contractions or ordinary adjacent words", () => {
     const text = "we've seen that the seller is in the home of the buyer";
     expect(normalizeQuestionText(text, vocabulary)).toBe(text);

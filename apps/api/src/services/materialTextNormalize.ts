@@ -110,13 +110,23 @@ function repairGluedArticle(text: string, vocabulary: TextVocabulary): string {
   });
 }
 
+const CJK = /[\u3040-\u30ff\u3400-\u9fff]/g;
+
+// An isolated ideograph inside English text is an OCR glitch, not content.
+function stripStrayCjk(text: string): string {
+  const cjk = (text.match(CJK) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  return cjk > 0 && latin >= cjk * 10 ? text.replace(CJK, "") : text;
+}
+
 export function normalizeQuestionText(text: string, vocabulary: TextVocabulary): string {
-  let result = text.normalize("NFKC");
-  result = result.replace(/^\s*\(?\s*\d{1,3}\.\s+(?=[A-Z])/, "");
+  let result = stripStrayCjk(text.normalize("NFKC"));
+  result = result.replace(/^\s*\(?\s*\d{1,3}[.,]\s+(?=[A-Z])/, "");
   result = repairGluedArticle(result, vocabulary);
   result = repairLigaturePairs(result, vocabulary);
   result = repairLigatureTokens(result, vocabulary);
-  return result.replace(/\s+/g, " ").trim();
+  // Ligature glyphs the OCR could not place end up as loose "fl fi" debris.
+  return result.replace(/\s+/g, " ").replace(/(?:\s+(?:ffi|ffl|fi|fl|ff))+$/, "").trim();
 }
 
 export function normalizeBankText(questions: MaterialQuestion[]): { questions: MaterialQuestion[]; changedCount: number } {
