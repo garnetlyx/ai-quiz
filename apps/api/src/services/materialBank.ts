@@ -16,11 +16,22 @@ const alnum = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const MIN_PROMPT_SIMILARITY = 0.6;
 
-// Same answer choices, ignoring order and OCR damage past the first characters.
-function optionSignature(question: MaterialQuestion): string | null {
-  const prefixes = question.options.map((option) => alnum(option.text).slice(0, 12));
-  if (prefixes.length < 2 || prefixes.some((prefix) => prefix.length === 0)) return null;
-  return prefixes.sort().join(",");
+const OPTION_PREFIX_LENGTH = 12;
+
+// The opening characters of each answer choice, so OCR damage further in does not matter.
+function optionPrefixes(question: MaterialQuestion): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const option of question.options) {
+    const prefix = alnum(option.text).slice(0, OPTION_PREFIX_LENGTH);
+    if (prefix) counts.set(prefix, (counts.get(prefix) || 0) + 1);
+  }
+  return counts;
+}
+
+function sharedOptionCount(a: Map<string, number>, b: Map<string, number>): number {
+  let shared = 0;
+  for (const [prefix, count] of a) shared += Math.min(count, b.get(prefix) || 0);
+  return shared;
 }
 
 function promptWords(question: MaterialQuestion): Set<string> {
@@ -32,6 +43,34 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   let shared = 0;
   for (const word of a) if (b.has(word)) shared += 1;
   return shared / (a.size + b.size - shared);
+}
+
+// How much of the smaller prompt appears in the larger one; a damaged copy
+// that absorbed a neighbouring question still contains the real prompt.
+function containment(a: Set<string>, b: Set<string>): number {
+  const smaller = a.size <= b.size ? a : b;
+  const larger = smaller === a ? b : a;
+  // A very short prompt is contained in many unrelated ones; it is no evidence.
+  if (smaller.size < MIN_CONTAINED_WORDS) return 0;
+  let shared = 0;
+  for (const word of smaller) if (larger.has(word)) shared += 1;
+  return shared / smaller.size;
+}
+
+const MIN_PROMPT_CONTAINMENT = 0.7;
+const MIN_CONTAINED_WORDS = 5;
+
+// Two records are the same question when their answer choices and prompts line up
+// well enough; unrelated prompts that merely share choices stay separate.
+function sameQuestion(
+  a: { words: Set<string>; options: Map<string, number> },
+  b: { words: Set<string>; options: Map<string, number> }
+): boolean {
+  const shared = sharedOptionCount(a.options, b.options);
+  const similarity = jaccard(a.words, b.words);
+  if (shared >= 4 && similarity >= MIN_PROMPT_SIMILARITY) return true;
+  if (shared >= 3 && containment(a.words, b.words) >= MIN_PROMPT_CONTAINMENT) return true;
+  return shared >= 2 && similarity >= 0.8;
 }
 
 function rawKeyedText(question: MaterialQuestion): string {
@@ -87,23 +126,23 @@ function betterCopy(a: MaterialQuestion, b: MaterialQuestion, damageOf: (questio
 // than once). Copies whose keyed answers disagree are never resolved by guess:
 // the surviving record goes to user review.
 export function dedupeNearDuplicates(questions: MaterialQuestion[], damageOf: (question: MaterialQuestion) => number = () => 0) {
-  // Cluster by identical option set, then by similar prompt wording. Questions
-  // without a reliable option signature stay on their own.
-  const clusters: { members: MaterialQuestion[]; words: Set<string>; first: number }[] = [];
-  const bySignature = new Map<string, typeof clusters>();
-  questions.forEach((question, index) => {
-    const signature = optionSignature(question);
-    const words = promptWords(question);
-    const candidates = signature ? bySignature.get(signature) : undefined;
-    const match = candidates?.find((cluster) => jaccard(cluster.words, words) >= MIN_PROMPT_SIMILARITY);
-    if (match) {
-      match.members.push(question);
-      return;
+  // Group records that are the same question (union-find over pairwise checks).
+  const features = questions.map((question) => ({ words: promptWords(question), options: optionPrefixes(question) }));
+  const parent = questions.map((_, index) => index);
+  const find = (index: number): number => (parent[index] === index ? index : (parent[index] = find(parent[index])));
+  for (let i = 0; i < questions.length; i++) {
+    for (let j = i + 1; j < questions.length; j++) {
+      if (find(i) !== find(j) && sameQuestion(features[i], features[j])) parent[find(j)] = find(i);
     }
-    const cluster = { members: [question], words, first: index };
-    clusters.push(cluster);
-    if (signature) bySignature.set(signature, [...(candidates || []), cluster]);
+  }
+  const byRoot = new Map<number, { members: MaterialQuestion[]; first: number }>();
+  questions.forEach((question, index) => {
+    const root = find(index);
+    const cluster = byRoot.get(root);
+    if (cluster) cluster.members.push(question);
+    else byRoot.set(root, { members: [question], first: index });
   });
+  const clusters = [...byRoot.values()].sort((a, b) => a.first - b.first);
 
   let removedCount = 0;
   let conflictCount = 0;

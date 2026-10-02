@@ -283,6 +283,27 @@ describe("dedupeNearDuplicates", () => {
     expect(dedupeNearDuplicates([a, b]).questions).toHaveLength(1);
   });
 
+  it("merges a damaged copy whose prompt absorbed another question and whose last option is garbled", () => {
+    const clean = materialQuestionFixture({
+      ...base, contentHash: "clean",
+      question: "A percolation test will examine the:",
+      options: opts(["soil's ability to absorb water", "depth of the water table", "slope of the land", "strength of the foundation"]),
+      answerLabels: ["A"], correctAnswers: [0],
+    });
+    const damaged = materialQuestionFixture({
+      ...base, contentHash: "damaged", reviewStatus: "needs_repair", repairFlags: ["model_audit_structure"],
+      question: "loans more affordable for everyone 7. A percolation test will examine the:",
+      options: opts(["soil's ability to absorb water", "depth of the water table", "slope of the land", "strength of the foundation 8. Next question text"]),
+      answerLabels: ["A"], correctAnswers: [0],
+    });
+
+    const result = dedupeNearDuplicates([damaged, clean]);
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].contentHash).toBe("clean");
+    expect(result.questions[0].reviewStatus).toBe("ready");
+  });
+
   it("does not merge unrelated prompts that happen to share option text", () => {
     const options = opts(["Depreciation", "Maintenance expenses", "Points paid", "The downpayment"]);
     const a = materialQuestionFixture({ ...base, options, contentHash: "a", question: "Which item can a homeowner deduct on taxes?" });
