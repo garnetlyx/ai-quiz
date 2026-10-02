@@ -27,6 +27,27 @@ otherwise-complete candidates. Run rebuilds with `MATERIAL_AI_VERIFY=false` when
 model audit is in use: guessed answers are not source-verified, and a
 non-deterministic rebuild invalidates cached audit verdicts.
 
+## Merge-Stage Cleanup
+
+`mergeQuestionBanks` (`services/materialBank.ts`) runs these steps, in order, on every rebuild:
+
+1. Drop records with a repeated `contentHash` (first bank wins).
+2. Normalize OCR text (`services/materialTextNormalize.ts`): NFKC (fullwidth punctuation),
+   stray leading list numbers, glued leading articles ("Alisting"), dropped fi/fl/ff
+   ligatures ("de ned"), trailing ligature debris, stray CJK glyphs. Repairs are judged
+   against the bank's own vocabulary; plain-text sources (not `.pdf`) are the trusted
+   reference, so no word list is hardcoded.
+3. Flag garbled text: a servable question with two or more words that are neither in the
+   system word list (`MATERIAL_WORDLIST`, default `/usr/share/dict/words`; the rebuild
+   fails if it is missing), nor repeated in another question, nor capitalized, goes to
+   `needs_repair` (`explicit_ocr_layout_pollution`). Counts use one copy per question.
+4. Collapse repeated scans of a question: same answer choices and a similar prompt
+   (Jaccard >= 0.6). The copy with fewer flags and more complete options wins; copies
+   that disagree on the keyed answer leave the survivor in `needs_user_review`.
+
+Any text change alters the audit fingerprint, so rerun the audit and rebuild until
+`modelAudit.unaudited` is 0 before importing.
+
 ## Model Audit (quality gate)
 
 Every servable (`ready` / `auto_repaired`) record is audited by an external
