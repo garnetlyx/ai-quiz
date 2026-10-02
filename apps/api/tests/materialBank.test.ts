@@ -259,7 +259,7 @@ describe("mergeQuestionBanks normalization", () => {
 });
 
 describe("flagGarbledQuestions", () => {
-  const words = new Set(["property", "manager", "monthly", "payment", "conditioner", "which", "loan", "borrower", "interest", "formaldehyde", "fumes", "insulation", "banned", "release", "house", "type", "what", "from", "that", "this", "with", "were"]);
+  const words = new Set(["property", "manager", "monthly", "payment", "conditioner", "which", "loan", "borrower", "interest", "formaldehyde", "fumes", "insulation", "banned", "release", "house", "type", "what", "from", "that", "this", "with", "were", "the", "made", "and", "pays", "for", "its", "one", "has"]);
   const isKnownWord = buildKnownWordPredicate(words);
 
   const make = (question: string, hash: string, extra = {}) => materialQuestionFixture({ question, contentHash: hash, ...extra });
@@ -272,6 +272,15 @@ describe("flagGarbledQuestions", () => {
     expect(result.questions[0].repairFlags).toContain("explicit_ocr_layout_pollution");
     expect(result.questions[0].repairActions.at(-1)?.note).toContain("agslare");
     expect(result.flaggedCount).toBe(1);
+  });
+
+  it("catches garbage made of short words too", () => {
+    // Only the three-letter tokens are unknown here, so this fails if the
+    // detector ignores short words.
+    const garbled = make("The cpa and xqz pays the property payment for the borrower", "short");
+    const result = flagGarbledQuestions([garbled], isKnownWord);
+    expect(result.questions[0].reviewStatus).toBe("needs_repair");
+    expect(result.questions[0].repairActions.at(-1)?.note).toContain("cpa");
   });
 
   it("keeps rare but real vocabulary and capitalized names servable", () => {

@@ -88,7 +88,7 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
   return { questions: ordered, removedCount, conflictCount };
 }
 
-const GARBLE_WORD = /(?<![A-Za-z'’])[A-Za-z]{4,}(?![A-Za-z'’])/g;
+const GARBLE_WORD = /(?<![A-Za-z'’])[A-Za-z]{3,}(?![A-Za-z'’])/g;
 const GARBLE_MIN_UNKNOWN_WORDS = 2;
 const INFLECTION_SUFFIXES = ["s", "es", "ed", "d", "ing", "ly", "er", "ers", "al", "ation", "ment"];
 
