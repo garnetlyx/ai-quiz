@@ -14,9 +14,24 @@ export interface MergedQuestionBank {
 
 const alnum = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-function nearDuplicateKey(question: MaterialQuestion): string {
-  const options = question.options.map((option) => alnum(option.text).slice(0, 12)).sort();
-  return `${alnum(question.question).slice(0, 100)}|${options.join(",")}`;
+const MIN_PROMPT_SIMILARITY = 0.6;
+
+// Same answer choices, ignoring order and OCR damage past the first characters.
+function optionSignature(question: MaterialQuestion): string | null {
+  const prefixes = question.options.map((option) => alnum(option.text).slice(0, 12));
+  if (prefixes.length < 2 || prefixes.some((prefix) => prefix.length === 0)) return null;
+  return prefixes.sort().join(",");
+}
+
+function promptWords(question: MaterialQuestion): Set<string> {
+  return new Set(question.question.toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let shared = 0;
+  for (const word of a) if (b.has(word)) shared += 1;
+  return shared / (a.size + b.size - shared);
 }
 
 function keyedAnswerText(question: MaterialQuestion): string {
@@ -52,18 +67,27 @@ function betterCopy(a: MaterialQuestion, b: MaterialQuestion): MaterialQuestion 
 // than once). Copies whose keyed answers disagree are never resolved by guess:
 // the surviving record goes to user review.
 export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
-  const groups = new Map<string, MaterialQuestion[]>();
-  for (const question of questions) {
-    const key = nearDuplicateKey(question);
-    const group = groups.get(key);
-    if (group) group.push(question);
-    else groups.set(key, [question]);
-  }
+  // Cluster by identical option set, then by similar prompt wording. Questions
+  // without a reliable option signature stay on their own.
+  const clusters: { members: MaterialQuestion[]; words: Set<string>; first: number }[] = [];
+  const bySignature = new Map<string, typeof clusters>();
+  questions.forEach((question, index) => {
+    const signature = optionSignature(question);
+    const words = promptWords(question);
+    const candidates = signature ? bySignature.get(signature) : undefined;
+    const match = candidates?.find((cluster) => jaccard(cluster.words, words) >= MIN_PROMPT_SIMILARITY);
+    if (match) {
+      match.members.push(question);
+      return;
+    }
+    const cluster = { members: [question], words, first: index };
+    clusters.push(cluster);
+    if (signature) bySignature.set(signature, [...(candidates || []), cluster]);
+  });
 
   let removedCount = 0;
   let conflictCount = 0;
-  const kept = new Map<string, MaterialQuestion>();
-  for (const [key, group] of groups) {
+  const ordered = clusters.map(({ members: group }) => {
     removedCount += group.length - 1;
     let best = group.reduce(betterCopy);
     const answers = group.map(keyedAnswerText);
@@ -81,10 +105,8 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
         }],
       };
     }
-    kept.set(key, best);
-  }
-  // Preserve first-seen order of the surviving groups.
-  const ordered = [...new Set(questions.map(nearDuplicateKey))].map((key) => kept.get(key)!);
+    return best;
+  });
   return { questions: ordered, removedCount, conflictCount };
 }
 
@@ -113,9 +135,15 @@ function wordsOf(question: MaterialQuestion): string[] {
 // OCR garbage is made of words that are neither real words nor repeated
 // anywhere else in the bank. Rare real vocabulary is in the word list, names
 // are capitalized, and recurring terms appear in more than one record.
-export function flagGarbledQuestions(questions: MaterialQuestion[], isKnownWord: (word: string) => boolean) {
+export function flagGarbledQuestions(
+  questions: MaterialQuestion[],
+  isKnownWord: (word: string) => boolean,
+  // One copy per question, so damage repeated across duplicate scans still
+  // counts as a one-off. Defaults to the questions themselves.
+  reference: MaterialQuestion[] = questions
+) {
   const recordCount = new Map<string, number>();
-  for (const question of questions) {
+  for (const question of reference) {
     const seen = new Set([
       ...wordsOf(question),
       ...((question.answerExplanation || "").normalize("NFKC").match(GARBLE_WORD) || []),
@@ -169,7 +197,7 @@ export function mergeQuestionBanks(
   const normalized = normalizeBankText(unique);
   // Garbled copies are excluded before dedup so a clean duplicate copy wins.
   const garbled = options.isKnownWord
-    ? flagGarbledQuestions(normalized.questions, options.isKnownWord)
+    ? flagGarbledQuestions(normalized.questions, options.isKnownWord, dedupeNearDuplicates(normalized.questions).questions)
     : { questions: normalized.questions, flaggedCount: 0 };
   const deduped = dedupeNearDuplicates(garbled.questions);
   return {

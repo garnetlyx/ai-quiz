@@ -234,6 +234,24 @@ describe("dedupeNearDuplicates", () => {
     expect(result.conflictCount).toBe(1);
   });
 
+  it("merges copies whose prompts differ by a word or two when the options match", () => {
+    const options = opts(["Depreciation", "Maintenance expenses", "Points paid on the mortgage", "The downpayment at the time of purchase"]);
+    const a = materialQuestionFixture({ ...base, options, answerLabels: ["C"], correctAnswers: [2], contentHash: "a",
+      question: "Which of the following items would a homeowner generally be able to deduct on her income taxes?" });
+    const b = materialQuestionFixture({ ...base, options, answerLabels: ["C"], correctAnswers: [2], contentHash: "b",
+      question: "Which of the following items would a residential homeowner be able to deduct on herincome taxes?" });
+
+    expect(dedupeNearDuplicates([a, b]).questions).toHaveLength(1);
+  });
+
+  it("does not merge unrelated prompts that happen to share option text", () => {
+    const options = opts(["Depreciation", "Maintenance expenses", "Points paid", "The downpayment"]);
+    const a = materialQuestionFixture({ ...base, options, contentHash: "a", question: "Which item can a homeowner deduct on taxes?" });
+    const b = materialQuestionFixture({ ...base, options, contentHash: "b", question: "Which expense is never allowed for an investor's building?" });
+
+    expect(dedupeNearDuplicates([a, b]).questions).toHaveLength(2);
+  });
+
   it("does not merge questions that share a prompt but have different options", () => {
     const one = materialQuestionFixture({ ...base, question: "Which is true?", contentHash: "a" });
     const two = materialQuestionFixture({ ...base, question: "Which is true?", contentHash: "b", options: opts(["p", "q", "r", "s"]) });
@@ -281,6 +299,18 @@ describe("flagGarbledQuestions", () => {
     const result = flagGarbledQuestions([garbled], isKnownWord);
     expect(result.questions[0].reviewStatus).toBe("needs_repair");
     expect(result.questions[0].repairActions.at(-1)?.note).toContain("cpa");
+  });
+
+  it("flags damage that repeats across duplicate scans when counting against a deduplicated reference", () => {
+    const text = "The seller willhonar the contraciual terms of payment";
+    const one = make(text, "d1");
+    const two = make(text, "d2");
+
+    // Counted as-is, the damaged words look "repeated elsewhere" and pass.
+    expect(flagGarbledQuestions([one, two], isKnownWord).flaggedCount).toBe(0);
+    // Counted against one copy per question, they are one-offs and are flagged.
+    const result = flagGarbledQuestions([one, two], isKnownWord, [one]);
+    expect(result.flaggedCount).toBe(2);
   });
 
   it("keeps rare but real vocabulary and capitalized names servable", () => {
