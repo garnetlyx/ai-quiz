@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { db } from "../db/index.js";
 import { materialQuestions, materialTextChunks, questions, quizSessions, topics } from "../db/schema.js";
-import { eq, and, desc, count, isNull, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, asc, desc, count, isNull, isNotNull, inArray } from "drizzle-orm";
 import { generateQuestions, getClient, getModel, parseJsonObject, getMessageContent, validateAiResponse, resolveModel, isValidAgent, type AiAgent } from "./ai.js";
 import { searchWeb } from "./search.js";
 import { buildFlagVerifyMessages } from "../prompts/flag-verify.js";
@@ -382,12 +382,10 @@ async function retryGenerateAi(
       await new Promise((r) => setTimeout(r, 5000));
       return retryGenerateAi(sessionId, topicId, topicDescription, format, aiCount, existingHashes, options, materials, scope, scopePlan, retriesLeft - 1);
     }
-    await db.update(quizSessions)
-      .set({ questionCount: 0 })
-      .where(eq(quizSessions.id, sessionId))
-      .catch(() => undefined);
+    await settleSessionAfterGenerationFailure(sessionId).catch(() => undefined);
   }
 }
+
 
   if (aiCount > 0) {
     setTimeout(() => retryGenerateAi(
@@ -396,6 +394,19 @@ async function retryGenerateAi(
   }
 
   return result;
+}
+
+// When AI generation gives up, the session is complete at the size it really
+// has; clients compare that with the size they asked for and tell the user.
+export async function settleSessionAfterGenerationFailure(sessionId: string) {
+  const [present] = await db
+    .select({ count: count() })
+    .from(questions)
+    .where(eq(questions.sessionId, sessionId));
+  await db
+    .update(quizSessions)
+    .set({ questionCount: present?.count ?? 0 })
+    .where(eq(quizSessions.id, sessionId));
 }
 
 async function generateAiQuestions(
@@ -472,7 +483,8 @@ export async function submitQuizAnswers(
   const questionRows = await db
     .select()
     .from(questions)
-    .where(eq(questions.sessionId, sessionId));
+    .where(eq(questions.sessionId, sessionId))
+    .orderBy(asc(questions.position));
   const format = session.topics.examFormat as ExamFormat | null;
 
   let correctCount = 0;
@@ -511,7 +523,8 @@ export async function submitQuizAnswers(
   const updatedQuestions = await db
     .select()
     .from(questions)
-    .where(eq(questions.sessionId, sessionId));
+    .where(eq(questions.sessionId, sessionId))
+    .orderBy(asc(questions.position));
 
   return {
     session: {
@@ -541,7 +554,8 @@ export async function getQuizResults(sessionId: string, userId: string) {
   const questionRows = await db
     .select()
     .from(questions)
-    .where(eq(questions.sessionId, sessionId));
+    .where(eq(questions.sessionId, sessionId))
+    .orderBy(asc(questions.position));
 
   const orphanedFlags = questionRows.filter(
     (q) => q.isFlagged && q.flagStatus === "pending_review" && !q.flagVerifiedAt

@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { build } from "../src/app.js";
 import { db } from "../src/db/index.js";
-import { materialImportJobs, materialQuestions, topics, users } from "../src/db/schema.js";
+import { materialImportJobs, materialQuestions, questions, topics, users } from "../src/db/schema.js";
 
 const testEmails: string[] = [];
 
@@ -45,7 +45,7 @@ async function createConfirmedTopic(userId: string, title: string) {
   return topic;
 }
 
-async function seedMaterialQuestion(topicId: string, userId: string) {
+async function seedMaterialQuestion(topicId: string, userId: string, index = 0) {
   const [job] = await db
     .insert(materialImportJobs)
     .values({
@@ -61,7 +61,7 @@ async function seedMaterialQuestion(topicId: string, userId: string) {
     })
     .returning();
 
-  const content = `What does ${topicId} test?`;
+  const content = `What does ${topicId} test? (${index})`;
   const [question] = await db
     .insert(materialQuestions)
     .values({
@@ -100,6 +100,56 @@ afterAll(async () => {
   for (const email of testEmails) {
     await db.delete(users).where(eq(users.email, email));
   }
+});
+
+describe("quiz question order", () => {
+  it("keeps the order the quiz showed on the status and results endpoints, even after rows are updated", async () => {
+    const { user, token } = await registerUser(`quiz-order-${Date.now()}@example.com`);
+    const topic = await createConfirmedTopic(user.id, "Quiz order");
+    for (let index = 0; index < 12; index++) await seedMaterialQuestion(topic.id, user.id, index);
+    const app = await build();
+    try {
+      const createRes = await app.inject({
+        method: "POST",
+        url: `/api/topics/${topic.id}/quiz`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { questionCount: 12 },
+      });
+      expect(createRes.statusCode).toBe(201);
+      const created = createRes.json() as { session: { id: string }; questions: { id: string }[] };
+      const shownOrder = created.questions.map((question) => question.id);
+      expect(shownOrder).toHaveLength(12);
+
+      // Flagging updates a row, which moves it physically; reads must not depend on that.
+      await db.update(questions).set({ isFlagged: true }).where(eq(questions.id, shownOrder[0]));
+      await db.update(questions).set({ isFlagged: true }).where(eq(questions.id, shownOrder[3]));
+
+      const status = await app.inject({
+        method: "GET",
+        url: `/api/quiz/${created.session.id}/status`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect((status.json() as { questions: { id: string }[] }).questions.map((q) => q.id)).toEqual(shownOrder);
+
+      const results = await app.inject({
+        method: "GET",
+        url: `/api/quiz/${created.session.id}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect((results.json() as { questions: { id: string }[] }).questions.map((q) => q.id)).toEqual(shownOrder);
+
+      const submit = await app.inject({
+        method: "POST",
+        url: `/api/quiz/${created.session.id}/submit`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { answers: Object.fromEntries(shownOrder.map((id) => [id, [0]])) },
+      });
+      expect(submit.statusCode).toBe(200);
+      expect((submit.json() as { questions: { id: string }[] }).questions.map((q) => q.id)).toEqual(shownOrder);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("quiz routes", () => {

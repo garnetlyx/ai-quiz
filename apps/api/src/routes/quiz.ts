@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { users, questions, quizSessions, topics } from "../db/schema.js";
-import { eq, count as drizzleCount } from "drizzle-orm";
+import { asc, eq, count as drizzleCount } from "drizzle-orm";
 import {
   generateQuizForTopic,
   submitQuizAnswers,
@@ -177,7 +177,8 @@ export async function quizRoutes(app: FastifyInstance) {
     const questionRows = await db
       .select()
       .from(questions)
-      .where(eq(questions.sessionId, sessionId));
+      .where(eq(questions.sessionId, sessionId))
+      .orderBy(asc(questions.position));
 
     return reply.send({
       currentCount: countResult?.count ?? 0,

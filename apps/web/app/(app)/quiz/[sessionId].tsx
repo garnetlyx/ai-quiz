@@ -38,6 +38,8 @@ export default function QuizFlowScreen() {
   const totalCount = useQuizStore((s) => s.totalCount);
   const pendingCount = useQuizStore((s) => s.pendingCount);
   const isGenerating = useQuizStore((s) => s.isGenerating);
+  const shortfallCount = useQuizStore((s) => s.shortfallCount);
+  const requestedCount = useQuizStore((s) => s.requestedCount);
   const pollQuestions = useQuizStore((s) => s.pollQuestions);
 
   const [flagModalVisible, setFlagModalVisible] = useState(false);
@@ -192,6 +194,11 @@ export default function QuizFlowScreen() {
             ]}
           />
         </View>
+        {shortfallCount > 0 && (
+          <Text style={styles.shortfallText}>
+            Only {totalCount} of {requestedCount} questions could be prepared: the AI generator was unavailable for the rest.
+          </Text>
+        )}
         {isGenerating && (
           <View style={styles.generatingRow}>
             <ActivityIndicator size="small" color="#2563eb" />
@@ -342,6 +349,7 @@ const styles = StyleSheet.create({
   progressFill: { height: 4, backgroundColor: "#2563eb", borderRadius: 2 },
   generatingRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
   generatingText: { fontSize: 12, color: "#2563eb" },
+  shortfallText: { fontSize: 12, color: "#b45309", marginTop: 6 },
   questionCard: { backgroundColor: "#fff", margin: 16, padding: 20, borderRadius: 12, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 },
   tag: { backgroundColor: "#eff6ff", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },

@@ -14,6 +14,8 @@ interface QuizState {
   totalCount: number;
   pendingCount: number;
   isGenerating: boolean;
+  requestedCount: number;
+  shortfallCount: number;
 
   startQuiz: (
     topicId: string,
@@ -51,6 +53,8 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   totalCount: 0,
   pendingCount: 0,
   isGenerating: false,
+  requestedCount: 0,
+  shortfallCount: 0,
 
   startQuiz: async (topicId, questionCount, options) => {
     set({ isLoading: true });
@@ -76,6 +80,8 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       totalCount: res.session.questionCount,
       pendingCount,
       isGenerating: pendingCount > 0,
+      requestedCount: res.session.questionCount,
+      shortfallCount: 0,
     });
   },
 
@@ -101,12 +107,14 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     }
 
     if (res.isComplete) {
-      set({
+      set((state) => ({
         isGenerating: false,
         pendingCount: 0,
         totalCount: res.totalCount,
         questions: res.questions,
-      });
+        // The server settles a failed generation at the size it really has.
+        shortfallCount: Math.max(0, state.requestedCount - res.totalCount),
+      }));
     }
   },
 
