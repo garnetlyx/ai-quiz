@@ -139,7 +139,12 @@ async function main() {
   const wordListPath = process.env.MATERIAL_WORDLIST || DEFAULT_WORDLIST;
   if (!existsSync(wordListPath)) throw new Error(`Word list not found at ${wordListPath}; set MATERIAL_WORDLIST`);
   const wordList = new Set((await readFile(wordListPath, "utf8")).split("\n").map((word) => word.trim().toLowerCase()));
-  const merged = mergeQuestionBanks(banks, { isKnownWord: buildKnownWordPredicate(wordList) });
+  // Verdicts are read before the merge: they decide which copy of a question survives.
+  const modelAuditPath = resolveFromRoot(getArg("model-audit") || DEFAULT_MODEL_AUDIT_FILE);
+  const audits = existsSync(modelAuditPath)
+    ? (JSON.parse(await readFile(modelAuditPath, "utf8")) as MaterialAuditRecord[])
+    : null;
+  const merged = mergeQuestionBanks(banks, { isKnownWord: buildKnownWordPredicate(wordList), audits: audits ?? undefined });
   let questions = merged.questions.map((question) => ({
     ...question,
     reviewStatus: validatedReviewStatus(question),
@@ -191,10 +196,8 @@ async function main() {
 
   // Model audit verdicts (see audit-material-bank.ts) gate what reaches quizzes:
   // incomplete/corrupted records and disputed keys leave the servable pool.
-  const modelAuditPath = resolveFromRoot(getArg("model-audit") || DEFAULT_MODEL_AUDIT_FILE);
   let modelAuditStats: ReturnType<typeof applyModelAudit>["stats"] | null = null;
-  if (existsSync(modelAuditPath)) {
-    const audits = JSON.parse(await readFile(modelAuditPath, "utf8")) as MaterialAuditRecord[];
+  if (audits) {
     const audited = applyModelAudit(questions, audits);
     questions = audited.questions;
     modelAuditStats = audited.stats;

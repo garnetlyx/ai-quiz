@@ -224,6 +224,16 @@ describe("dedupeNearDuplicates", () => {
     expect(result.questions[0].contentHash).toBe("clean");
   });
 
+  it("prefers a copy that passed the model audit over one it failed", () => {
+    const failedAudit = materialQuestionFixture({ ...base, contentHash: "failed", answerExplanation: "Has an explanation." });
+    const passedAudit = materialQuestionFixture({ ...base, contentHash: "passed", answerExplanation: null });
+
+    const result = dedupeNearDuplicates([failedAudit, passedAudit], () => 0, (question) => question.contentHash === "failed");
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].contentHash).toBe("passed");
+  });
+
   it("treats a truncated copy of the same answer as compatible", () => {
     const full = materialQuestionFixture({
       ...base, contentHash: "full",
@@ -317,6 +327,26 @@ describe("dedupeNearDuplicates", () => {
     const two = materialQuestionFixture({ ...base, question: "Which is true?", contentHash: "b", options: opts(["p", "q", "r", "s"]) });
 
     expect(dedupeNearDuplicates([one, two]).questions).toHaveLength(2);
+  });
+});
+
+describe("mergeQuestionBanks with audits", () => {
+  it("keeps the copy the audit passed even when an earlier bank's copy would otherwise win", () => {
+    const text = { question: "A listing agent owes duties to the seller and the principal under agency law", options: [
+      { id: "A" as const, text: "loyalty and confidentiality" }, { id: "B" as const, text: "none of these" }, { id: "C" as const, text: "tax advice only" }, { id: "D" as const, text: "title insurance" },
+    ] };
+    const first = materialQuestionFixture({ ...text, contentHash: "first" });
+    // Same question, one word different, so the two copies have different fingerprints.
+    const second = materialQuestionFixture({ ...text, question: text.question.replace("and the principal", "and principal"), contentHash: "second" });
+    const verdict = (complete: boolean) => ({ complete, optionsClean: true, modelAnswer: "A" as const, keyVerdict: "correct" as const, explanationMatches: null, issues: [] });
+    const audit = (question: typeof first, complete: boolean) => ({
+      fingerprint: materialAuditFingerprint(question), promptVersion: "v", command: "cli", auditedAt: "2026-01-01T00:00:00.000Z", verdict: verdict(complete),
+    });
+
+    const merged = mergeQuestionBanks([[first], [second]], { audits: [audit(first, false), audit(second, true)] });
+
+    expect(merged.questions).toHaveLength(1);
+    expect(merged.questions[0].contentHash).toBe("second");
   });
 });
 

@@ -106,9 +106,14 @@ function optionLength(question: MaterialQuestion): number {
 // Among copies of one question: servable first, then the one with fewer
 // unreadable words (a relative measure, so gaps in the word list cancel out),
 // then fewer flags, an explanation, and the more complete options.
-function betterCopy(a: MaterialQuestion, b: MaterialQuestion, damageOf: (question: MaterialQuestion) => number): MaterialQuestion {
+function betterCopy(
+  a: MaterialQuestion,
+  b: MaterialQuestion,
+  damageOf: (question: MaterialQuestion) => number,
+  auditFailed: (question: MaterialQuestion) => boolean
+): MaterialQuestion {
   const rank = (question: MaterialQuestion) => [
-    servableRank(question),
+    servableRank(question) === 0 && !auditFailed(question) ? 0 : 1,
     damageOf(question),
     question.repairFlags.length,
     question.answerExplanation ? 0 : 1,
@@ -125,7 +130,11 @@ function betterCopy(a: MaterialQuestion, b: MaterialQuestion, damageOf: (questio
 // Collapses repeated copies of the same question (the same book scanned more
 // than once). Copies whose keyed answers disagree are never resolved by guess:
 // the surviving record goes to user review.
-export function dedupeNearDuplicates(questions: MaterialQuestion[], damageOf: (question: MaterialQuestion) => number = () => 0) {
+export function dedupeNearDuplicates(
+  questions: MaterialQuestion[],
+  damageOf: (question: MaterialQuestion) => number = () => 0,
+  auditFailed: (question: MaterialQuestion) => boolean = () => false
+) {
   // Group records that are the same question (union-find over pairwise checks).
   const features = questions.map((question) => ({ words: promptWords(question), options: optionPrefixes(question) }));
   const parent = questions.map((_, index) => index);
@@ -148,7 +157,7 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[], damageOf: (q
   let conflictCount = 0;
   const ordered = clusters.map(({ members: group }) => {
     removedCount += group.length - 1;
-    let best = group.reduce((a, b) => betterCopy(a, b, damageOf));
+    let best = group.reduce((a, b) => betterCopy(a, b, damageOf, auditFailed));
     const answers = group.map((member) => ({ key: keyedAnswerText(member), text: rawKeyedText(member) }));
     const reference = { key: keyedAnswerText(best), text: rawKeyedText(best) };
     const conflicting = answers.some((answer) => !answersCompatible(answer.key, reference.key, answer.text, reference.text));
@@ -241,7 +250,7 @@ export function flagGarbledQuestions(
 // deterministic OCR text damage and collapses repeated scans of a question.
 export function mergeQuestionBanks(
   banks: MaterialQuestion[][],
-  options: { isKnownWord?: (word: string) => boolean } = {}
+  options: { isKnownWord?: (word: string) => boolean; audits?: MaterialAuditRecord[] } = {}
 ): MergedQuestionBank {
   const seen = new Set<string>();
   const unique: MaterialQuestion[] = [];
@@ -265,7 +274,14 @@ export function mergeQuestionBanks(
   const damageOf = isKnownWord
     ? (question: MaterialQuestion) => wordsOf(question).filter((word) => !isKnownWord(word.toLowerCase())).length
     : undefined;
-  const deduped = dedupeNearDuplicates(garbled.questions, damageOf);
+  // Audit verdicts decide which copy of a question survives; they are applied for real
+  // later, on the final text.
+  const verdictByFingerprint = new Map((options.audits || []).map((audit) => [audit.fingerprint, audit.verdict]));
+  const auditFailed = (question: MaterialQuestion) => {
+    const verdict = verdictByFingerprint.get(materialAuditFingerprint(question));
+    return verdict ? auditVerdictFails(verdict) : false;
+  };
+  const deduped = dedupeNearDuplicates(garbled.questions, damageOf, auditFailed);
   return {
     questions: deduped.questions,
     duplicateCount: duplicateCount + deduped.removedCount,
@@ -356,6 +372,11 @@ export function materialAuditFingerprint(question: MaterialQuestion): string {
       question.answerExplanation ?? null,
     ]))
     .digest("hex");
+}
+
+// A verdict removes a question from quizzes when the question is broken or the key is doubted.
+export function auditVerdictFails(verdict: MaterialAuditVerdict): boolean {
+  return !verdict.complete || !verdict.optionsClean || verdict.keyVerdict !== "correct";
 }
 
 export function applyModelAudit(questions: MaterialQuestion[], audits: MaterialAuditRecord[]) {
