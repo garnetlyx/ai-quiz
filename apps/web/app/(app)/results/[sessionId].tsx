@@ -13,6 +13,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { api } from "@/services/api";
 import type { FlagStatus, Question, QuizSession } from "@ai-quiz/shared";
+import { splitExplanations } from "@/services/explanations";
 
 type FlagCategory = "wrong_answer" | "misleading_explanation" | "question_unclear";
 
@@ -118,7 +119,9 @@ export default function ResultsScreen() {
         data={questions}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
-        renderItem={({ item, index }) => (
+        renderItem={({ item, index }) => {
+          const { shared, perOption } = splitExplanations(item.options, item.explanations);
+          return (
           <View
             style={[
               styles.questionCard,
@@ -149,9 +152,7 @@ export default function ResultsScreen() {
             {item.options.map((opt, optIdx) => {
               const isUserAnswer = item.userAnswers?.includes(optIdx);
               const isCorrectAnswer = item.correctAnswers.includes(optIdx);
-              const explanation = item.explanations.find(
-                (e) => e.optionId === opt.id
-              );
+              const explanation = perOption.get(opt.id);
 
               return (
                 <View
@@ -168,13 +169,18 @@ export default function ResultsScreen() {
                     {isCorrectAnswer ? " ✓" : ""}
                   </Text>
                   {explanation && (
-                    <Text style={styles.explanation}>
-                      {explanation.explanation}
-                    </Text>
+                    <Text style={styles.explanation}>{explanation}</Text>
                   )}
                 </View>
               );
             })}
+
+            {shared && (
+              <View style={styles.sharedExplanation}>
+                <Text style={styles.sharedExplanationTitle}>Explanation</Text>
+                <Text style={styles.explanation}>{shared}</Text>
+              </View>
+            )}
 
             <View style={styles.tagsRow}>
               {item.subtopicTags.map((tag) => (
@@ -198,7 +204,8 @@ export default function ResultsScreen() {
               </View>
             )}
           </View>
-        )}
+          );
+        }}
       />
 
       <Modal visible={Boolean(flaggingQuestionId)} animationType="slide" transparent>
@@ -290,6 +297,8 @@ const styles = StyleSheet.create({
   optionWrong: { backgroundColor: "#fef2f2", borderLeftWidth: 3, borderLeftColor: "#dc2626" },
   optionLabel: { fontSize: 14, color: "#333" },
   explanation: { fontSize: 13, color: "#666", marginTop: 4, lineHeight: 18 },
+  sharedExplanation: { marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: "#f0f4ff" },
+  sharedExplanationTitle: { fontSize: 12, fontWeight: "700", color: "#3b5bdb" },
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   tag: { backgroundColor: "#eff6ff", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
   tagText: { fontSize: 12, color: "#2563eb" },

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "expo start",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ai-quiz/shared": "*",
