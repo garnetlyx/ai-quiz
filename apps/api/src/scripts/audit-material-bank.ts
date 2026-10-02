@@ -1,12 +1,10 @@
 import "../env.js";
 import { spawn } from "child_process";
+import { randomUUID } from "crypto";
 import { existsSync } from "fs";
-import { readFile, rename, writeFile } from "fs/promises";
+import { readFile, rename, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
-import { eq } from "drizzle-orm";
-import { client, db } from "../db/index.js";
-import { topics } from "../db/schema.js";
 import {
   buildMaterialAuditPrompt,
   MATERIAL_AUDIT_PROMPT_VERSION,
@@ -31,6 +29,32 @@ function getArg(name: string): string | null {
   const prefix = `--${name}=`;
   const found = process.argv.find((arg) => arg.startsWith(prefix));
   return found ? found.slice(prefix.length) : null;
+}
+
+function positiveIntegerArg(name: string, defaultValue: number): number {
+  const raw = getArg(name);
+  if (raw === null) return defaultValue;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  return value;
+}
+
+async function resolveTopicDescription(): Promise<string> {
+  const description = getArg("topic-description");
+  if (description?.trim()) return description;
+  const topicId = getArg("topic-id");
+  if (!topicId) throw new Error("Pass --topic-id=<uuid> or --topic-description=<title and description>");
+  // Exported banks can be audited independently of database availability.
+  const { client, db } = await import("../db/index.js");
+  try {
+    const { eq } = await import("drizzle-orm");
+    const { topics } = await import("../db/schema.js");
+    const [topic] = await db.select().from(topics).where(eq(topics.id, topicId)).limit(1);
+    if (!topic) throw new Error(`Topic ${topicId} not found`);
+    return `${topic.title}. ${topic.description}`;
+  } finally {
+    await client.end();
+  }
 }
 
 // Runs the user-chosen model CLI with the prompt as its final argument. Runs in
@@ -110,19 +134,13 @@ function toAuditItem(question: MaterialQuestion, n: number): MaterialAuditItem {
 async function main() {
   const command = getArg("cmd") || process.env.MATERIAL_AUDIT_CMD;
   if (!command) throw new Error("Pass --cmd=\"<cli> <args> -p\" or set MATERIAL_AUDIT_CMD");
-  const topicId = getArg("topic-id");
-  if (!topicId) throw new Error("Pass --topic-id=<uuid> (its title and description frame the audit)");
   const inputPath = path.resolve(repoRoot(), getArg("input") || DEFAULT_INPUT);
   const outputPath = path.resolve(repoRoot(), getArg("output") || DEFAULT_OUTPUT);
-  const batchSize = Number(getArg("batch-size") || 10);
-  const concurrency = Number(getArg("concurrency") || 1);
-  const limit = getArg("limit") ? Number(getArg("limit")) : Infinity;
-  const timeoutMs = Number(getArg("timeout-ms") || 600000);
-
-  const [topic] = await db.select().from(topics).where(eq(topics.id, topicId)).limit(1);
-  await client.end();
-  if (!topic) throw new Error(`Topic ${topicId} not found`);
-  const topicDescription = `${topic.title}. ${topic.description}`;
+  const batchSize = positiveIntegerArg("batch-size", 10);
+  const concurrency = positiveIntegerArg("concurrency", 1);
+  const limit = positiveIntegerArg("limit", Infinity);
+  const timeoutMs = positiveIntegerArg("timeout-ms", 600000);
+  const topicDescription = await resolveTopicDescription();
 
   const questions = JSON.parse(await readFile(inputPath, "utf8")) as MaterialQuestion[];
   const cache = new Map<string, MaterialAuditRecord>();
@@ -140,10 +158,20 @@ async function main() {
   for (let i = 0; i < pending.length; i += batchSize) batches.push(pending.slice(i, i + batchSize));
   console.error(`[audit] ${pending.length} to audit in ${batches.length} batches (${cache.size} cached), concurrency ${concurrency}`);
 
-  const save = async () => {
-    const tmp = `${outputPath}.tmp`;
-    await writeFile(tmp, `${JSON.stringify([...cache.values()], null, 2)}\n`);
-    await rename(tmp, outputPath);
+  let saving = Promise.resolve();
+  const save = () => {
+    // Serialize snapshots and renames so an older worker cannot overwrite a
+    // newer cache or rename another worker's temporary file.
+    saving = saving.then(async () => {
+      const tmp = `${outputPath}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(tmp, `${JSON.stringify([...cache.values()], null, 2)}\n`);
+        await rename(tmp, outputPath);
+      } finally {
+        await rm(tmp, { force: true });
+      }
+    });
+    return saving;
   };
 
   let done = 0;
@@ -193,6 +221,7 @@ async function main() {
     keyUnsure: verdicts.filter((v) => v.keyVerdict === "unsure").length,
     explanationMismatch: verdicts.filter((v) => v.explanationMatches === false).length,
   }, null, 2));
+  if (failed > 0) process.exitCode = 1;
 }
 
 main().catch((error) => {
