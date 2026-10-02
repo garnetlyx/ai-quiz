@@ -409,7 +409,10 @@ export function applyModelAudit(questions: MaterialQuestion[], audits: MaterialA
       next.repairActions.push({ type: "model_audit", status: "failed", note: `Model audit (${audit.promptVersion}): ${issues}` });
       return next;
     }
-    if (verdict.keyVerdict !== "correct") {
+    // A verified answer outranks the model's doubt about the key; broken
+    // structure (above) still fails it.
+    const verified = question.repairActions.some((action) => action.type === "verified_answer_override");
+    if (verdict.keyVerdict !== "correct" && !verified) {
       stats.keyDisputed += 1;
       next.reviewStatus = "needs_user_review";
       next.repairFlags.push("model_audit_key_disputed");

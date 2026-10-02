@@ -144,6 +144,26 @@ describe("applyModelAudit", () => {
     expect(result.repairActions.at(-1)?.note).toContain("Question starts mid-sentence");
   });
 
+  it("does not let the model's doubt about the key override a verified answer", () => {
+    const question = materialQuestionFixture({
+      reviewStatus: "auto_repaired",
+      repairActions: [{ type: "verified_answer_override", status: "applied", note: "Adjudicated against the question text." }],
+    });
+    const audit = auditFor(question, { keyVerdict: "wrong", modelAnswer: "C" });
+    const [result] = applyModelAudit([question], [audit]).questions;
+    expect(result.reviewStatus).toBe("auto_repaired");
+  });
+
+  it("still fails a verified answer whose question or options are broken", () => {
+    const question = materialQuestionFixture({
+      reviewStatus: "auto_repaired",
+      repairActions: [{ type: "verified_answer_override", status: "applied", note: "Adjudicated against the question text." }],
+    });
+    const audit = auditFor(question, { optionsClean: false, keyVerdict: "wrong", issues: ["Option D is garbage"] });
+    const [result] = applyModelAudit([question], [audit]).questions;
+    expect(result.reviewStatus).toBe("needs_repair");
+  });
+
   it("routes a disputed answer key to needs_user_review with the model answer", () => {
     const question = materialQuestionFixture();
     const audit = auditFor(question, { keyVerdict: "wrong", modelAnswer: "C" });
