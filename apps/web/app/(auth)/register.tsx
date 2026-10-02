@@ -20,6 +20,7 @@ export default function RegisterScreen() {
   const router = useRouter();
 
   const handleRegister = async () => {
+    if (isLoading) return;
     setError("");
     if (password !== confirmPassword) {
       setError("Passwords do not match");
@@ -67,6 +68,8 @@ export default function RegisterScreen() {
           placeholder="Confirm password"
           value={confirmPassword}
           onChangeText={setConfirmPassword}
+          onSubmitEditing={handleRegister}
+          returnKeyType="go"
           secureTextEntry
           placeholderTextColor="#999"
         />

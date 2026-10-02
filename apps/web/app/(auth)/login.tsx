@@ -19,6 +19,7 @@ export default function LoginScreen() {
   const router = useRouter();
 
   const handleLogin = async () => {
+    if (isLoading) return;
     setError("");
     try {
       await login(email, password);
@@ -50,6 +51,8 @@ export default function LoginScreen() {
           placeholder="Password"
           value={password}
           onChangeText={setPassword}
+          onSubmitEditing={handleLogin}
+          returnKeyType="go"
           secureTextEntry
           placeholderTextColor="#999"
         />
