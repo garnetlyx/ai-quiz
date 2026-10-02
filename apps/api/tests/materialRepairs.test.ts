@@ -43,6 +43,13 @@ describe("applyMaterialRepairs", () => {
     expect(result.questions[0].repairActions.at(-1)?.note).toContain(materialAuditFingerprint(question));
   });
 
+  it("accepts a repair for a question the book printed without an explanation", () => {
+    const question = original();
+    const result = applyMaterialRepairs([question], [{ ...repair(question), answerExplanation: null }]);
+    expect(result.questions[0].answerExplanation).toBeNull();
+    expect(result.questions[0].reviewStatus).toBe("auto_repaired");
+  });
+
   it("refuses stale or unmatched repairs instead of changing a different extraction", () => {
     expect(() => applyMaterialRepairs([original()], [{ ...repair(), inputFingerprint: "0".repeat(64) }])).toThrow(/stale/i);
     expect(() => applyMaterialRepairs([original()], [{ ...repair(), questionId: "missing" }])).toThrow(/not found/i);

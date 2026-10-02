@@ -12,7 +12,8 @@ const repairSchema = z.object({
   question: text,
   options: z.array(z.object({ id: label, text })).length(label.options.length),
   answerLabels: z.array(label).length(1),
-  answerExplanation: text,
+  // Many printed questions have no explanation; none is invented.
+  answerExplanation: text.nullable(),
   chapter: z.object({ number: z.number().int().nullable(), title: text.nullable() }).optional(),
   subtopic: text.optional(),
   subtopicTags: z.array(text).min(1).optional(),
