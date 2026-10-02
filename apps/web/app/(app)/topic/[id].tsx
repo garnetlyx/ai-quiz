@@ -43,6 +43,7 @@ export default function TopicDetailScreen() {
   const [setupError, setSetupError] = useState("");
   const [isConfirming, setIsConfirming] = useState(false);
   const [materialJobs, setMaterialJobs] = useState<MaterialImportJob[]>([]);
+  const [showEarlierJobs, setShowEarlierJobs] = useState(false);
   const [materialQuestions, setMaterialQuestions] = useState<MaterialQuestionBankItem[]>([]);
   const [materialChunks, setMaterialChunks] = useState<MaterialTextChunk[]>([]);
   const [materialSuggestions, setMaterialSuggestions] = useState<TopicUpdateSuggestion[]>([]);
@@ -683,7 +684,7 @@ export default function TopicDetailScreen() {
           {materialError ? <Text style={styles.error}>{materialError}</Text> : null}
 
           <Text style={styles.materialHeading}>Import Jobs</Text>
-          {materialJobs.map((job) => (
+          {(showEarlierJobs ? materialJobs : materialJobs.slice(0, 1)).map((job) => (
             <View key={job.id} style={styles.materialCard}>
               <Text style={styles.materialTitle}>{job.fileName}</Text>
               <Text style={styles.historyMeta}>{job.status} · {job.progress}%</Text>
@@ -704,6 +705,13 @@ export default function TopicDetailScreen() {
               {job.error ? <Text style={styles.error}>{job.error}</Text> : null}
             </View>
           ))}
+          {materialJobs.length > 1 && (
+            <Pressable onPress={() => setShowEarlierJobs((value) => !value)}>
+              <Text style={styles.earlierJobsLink}>
+                {showEarlierJobs ? "Hide earlier imports" : `Show ${materialJobs.length - 1} earlier import${materialJobs.length - 1 === 1 ? "" : "s"}`}
+              </Text>
+            </Pressable>
+          )}
           {materialJobs.length === 0 && <Text style={styles.emptyText}>No material uploads yet</Text>}
 
           <Text style={styles.materialHeading}>Repair Diagnostics</Text>
@@ -889,6 +897,7 @@ const styles = StyleSheet.create({
   materialHeading: { fontSize: 16, fontWeight: "700", marginTop: 20, marginBottom: 8 },
   materialCard: { backgroundColor: "#fff", padding: 12, borderRadius: 8, marginBottom: 8 },
   materialTitle: { fontSize: 14, fontWeight: "600", marginBottom: 4 },
+  earlierJobsLink: { fontSize: 13, color: "#3b5bdb", marginTop: 4 },
   repairPanel: { marginTop: 8, gap: 6 },
   repairAction: { fontSize: 13, color: "#475569", lineHeight: 18 },
   rawSource: { fontSize: 12, color: "#777", backgroundColor: "#f8fafc", padding: 8, borderRadius: 6 },

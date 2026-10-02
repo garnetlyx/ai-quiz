@@ -10,7 +10,7 @@ import {
   topicUpdateSuggestions,
   users,
 } from "../db/schema.js";
-import { eq, and, isNotNull, isNull } from "drizzle-orm";
+import { eq, and, desc, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { interpretTopic, detectFormat, generateScope, isValidAgent, type AiAgent } from "../services/ai.js";
 import { searchWeb } from "../services/search.js";
@@ -289,7 +289,7 @@ export async function topicRoutes(app: FastifyInstance) {
       .select()
       .from(materialImportJobs)
       .where(and(eq(materialImportJobs.topicId, id), eq(materialImportJobs.userId, userId)))
-      .orderBy(materialImportJobs.createdAt);
+      .orderBy(desc(materialImportJobs.createdAt));
   });
 
   app.get("/api/topics/:id/material-imports/:jobId", async (request, reply) => {
@@ -316,7 +316,11 @@ export async function topicRoutes(app: FastifyInstance) {
       .where(and(eq(topics.id, id), eq(topics.userId, userId), isNull(topics.archivedAt)))
       .limit(1);
     if (!topic) return reply.status(404).send({ message: "Topic not found" });
-    const rows = await db.select().from(materialQuestions).where(eq(materialQuestions.topicId, id));
+    // Inactive rows belong to superseded imports; they are history, not the bank.
+    const rows = await db
+      .select()
+      .from(materialQuestions)
+      .where(and(eq(materialQuestions.topicId, id), eq(materialQuestions.active, true)));
     return status ? rows.filter((row) => row.reviewStatus === status) : rows;
   });
 
