@@ -413,14 +413,24 @@ function hasCompleteOptions(question: RawQuestion): boolean {
 function shouldStartNewQuestion(current: RawQuestion, line: SourceLine, upcoming: SourceLine[]): boolean {
   if (!hasCompleteOptions(current)) return false;
   if (current.source === "example_question" && !current.answerLabels.length) return false;
-  if (optionMatch(line.text) || answerMatch(line.text)) return false;
+  // Once an inline answer is collected, a leading article ("A commercial
+  // tenant...") is a possible prompt, not another answer label. Only the
+  // punctuated option syntax is unambiguous at this boundary.
+  if (optionMatch(line.text)) return false;
   if (/^[A-D]$/i.test(line.text)) return false;
   if (line.text.length < 12) return false;
+  // When an uppercase prompt start is visible before the next A option, leave
+  // lowercase wrapped explanation lines with their answer. Do not discard
+  // lowercase-only candidates: damaged OCR still needs a visible repair item.
+  if (current.source === "example_question" && /^[a-z]/.test(line.text)) {
+    const nextOption = upcoming.findIndex((next) => optionMatch(next.text));
+    if (nextOption >= 0 && upcoming.slice(0, nextOption).some((next) => /^[A-Z]/.test(next.text))) return false;
+  }
   return upcoming.slice(0, 5).some((next) => optionMatch(next.text)?.id === "A");
 }
 
 function looksLikeNonQuestionMaterial(line: string): boolean {
-  return /^(key point|note|objective|chapter|unit|lesson|syllabus|scope|exam|test|format|language|explanation|explain|japanese|english|n[1-5]\b)/i.test(line);
+  return /^(key point|note\s*:|objective|chapter|unit|lesson|syllabus|scope|exam|test|format|language|explanation|explain|japanese|english|n[1-5]\b)/i.test(line);
 }
 
 function repairFlagsForQuestion(

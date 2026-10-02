@@ -2,6 +2,88 @@ import { describe, expect, it } from "vitest";
 import { extractMaterialQuestions } from "../src/services/materialExtraction.js";
 
 describe("material extraction", () => {
+  it("does not treat a wrapped promissory note explanation as a Note heading", async () => {
+    // Wa-agent.pdf page 45, last explanation line before the next sample.
+    const text = `Sample Questions
+An optionee's rights can be assigned under all of the
+following circumstances, EXCEPT when the:
+A. option money is $10 or less
+B. option money is in the form of a promissory note
+C. optionor has died
+D. optionee has died
+B. If the option money is in the form of a promissory
+note, the optionee cannot assign it (nor can his
+estate, if the optionee is dead).
+A buyer and seller agree upon an option to purchase
+with a 60-day option period. When should the parties
+agree upon the purchase price?
+A. Any point between the signing of the option agreement and closing
+B. At closing
+C. Before signing the option agreement
+D. When the buyer decides to exercise the option
+C. An option agreement should contain all of the details.`;
+    const { questions } = await extractMaterialQuestions({ filePath: "Wa-agent.pdf", text });
+    expect(questions).toHaveLength(2);
+    expect(questions[0].answerExplanation).toContain("promissory note, the optionee");
+    expect(questions[1].question).toMatch(/^A buyer and seller/);
+  });
+
+  it("keeps article-led prompts and lowercase explanation continuations separate", async () => {
+    // Wa-agent.pdf, page 2: these are consecutive unnumbered sample questions.
+    // The source wraps the second explanation immediately before 'Of all...'.
+    const text = `Chapter 1: The Nature of Real Property
+Sample Questions
+A buyer purchases a rental home that is fully furnished.
+The document used to transfer title to the furniture is a:
+A. quitclaim deed
+B. bill of sale
+C. special warranty deed
+D. general warranty deed
+B. Deeds transfer title to real estate; a bill of sale is
+used to transfer title to personal property.
+A commercial tenant leases retail space for $1,500
+per month. A few months later, the owner of the
+complex adds new counters and increases the rent
+to $1,750 per month. At the end of the lease term, the
+commercial tenant:
+A. cannot take the counters with her, because the
+owner installed them
+B. can take the counters with her if she reimburses
+the owner for the fair market value of the counters
+C. can take the counters with her if she reimburses
+the owner for any damage caused by removal
+D. can take the counters with her without any charge
+A. A commercial tenant may take trade fixtures-
+equipment the tenant installed for use in her
+business-with her when she moves out at the end
+of the lease. In this case, however, the counters
+were added by the owner, not the tenant, so they
+would not be considered trade fixtures.
+Of all the tests used to determine whether an item is
+a fixture, the most important is the:
+A. method of attachment
+B. intention of the party who attached the item
+C. adaptation of the item to the property
+D. weight of the item
+B. The intention of the party who attached the item is
+the most important fixture test.`;
+
+    const result = await extractMaterialQuestions({ filePath: "Wa-agent.pdf", text });
+    expect(result.questions).toHaveLength(3);
+    expect(result.questions[0].answerExplanation).toBe(
+      "Deeds transfer title to real estate; a bill of sale is used to transfer title to personal property."
+    );
+    expect(result.questions[1].question).toBe(
+      "A commercial tenant leases retail space for $1,500 per month. A few months later, the owner of the complex adds new counters and increases the rent to $1,750 per month. At the end of the lease term, the commercial tenant:"
+    );
+    expect(result.questions[1].answerExplanation).toContain(
+      "of the lease. In this case, however, the counters were added by the owner, not the tenant, so they would not be considered trade fixtures."
+    );
+    expect(result.questions[2].question).toBe(
+      "Of all the tests used to determine whether an item is a fixture, the most important is the:"
+    );
+  });
+
   it("extracts chapter quiz questions and joins answer key explanations", async () => {
     const text = `Chapter 1: The Nature of Real Property
 Chapter Quiz
