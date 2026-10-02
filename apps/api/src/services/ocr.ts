@@ -479,6 +479,14 @@ export async function ocrPdfPage(
   return ocrImage(image, opts);
 }
 
+/**
+ * Join per-page OCR text in the layout-text format the question extractor reads:
+ * a source line, then each page behind a [PDF_PAGE n] marker.
+ */
+export function joinOcrPages(sourcePath: string, pageTexts: string[]): string {
+  return `[PDF_SOURCE ${sourcePath}]` + pageTexts.map((text, index) => `\n\n[PDF_PAGE ${index + 1}]\n${text}`).join("");
+}
+
 /** Heuristic: does this page text look too thin to skip OCR? */
 export function hasUsableTextLayer(pageText: string): boolean {
   return pageText.replace(/\s/g, "").length >= TEXT_LAYER_MIN_CHARS;

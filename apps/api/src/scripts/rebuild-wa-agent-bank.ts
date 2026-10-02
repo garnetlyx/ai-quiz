@@ -83,6 +83,33 @@ async function main() {
     });
   }
 
+  // Per-book text from the column-aware OCR (npm run ocr:pdf-pages). It is read
+  // as extra copies of the same questions: the merge keeps the cleanest copy of
+  // each question and adds the ones the text layer lost. Listed first so it wins ties.
+  const ocrTextDir = getArg("ocr-text-dir");
+  if (ocrTextDir) {
+    const ocrFiles = (await readdir(resolveFromRoot(ocrTextDir))).filter((file) => file.endsWith(".txt")).sort();
+    for (const file of ocrFiles) {
+      const relativePath = `${pdfDir}/${file.replace(/\.txt$/, ".pdf")}`;
+      console.error(`[rebuild] extracting OCR text ${ocrTextDir}/${file}...`);
+      const result = await extractMaterialQuestions({
+        filePath: relativePath,
+        text: await readFile(resolveFromRoot(`${ocrTextDir}/${file}`), "utf8"),
+        verifier: null,
+        aiSectionLimit: 0,
+      });
+      banks.unshift(result.questions);
+      perSource.push({
+        file: `${ocrTextDir}/${file}`,
+        totalQuestions: result.report.totalQuestions,
+        readyQuestions: result.report.readyQuestions,
+        autoRepairedQuestions: result.report.autoRepairedQuestions,
+        needsRepairQuestions: result.report.needsRepairQuestions,
+        needsUserReviewQuestions: result.report.needsUserReviewQuestions,
+      });
+    }
+  }
+
   const practiceQuestions = await parsePracticeTests();
   banks.push(practiceQuestions);
   perSource.push({

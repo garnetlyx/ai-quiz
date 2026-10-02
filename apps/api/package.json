@@ -13,6 +13,7 @@
     "import:materials": "tsx src/scripts/import-material-questions.ts",
     "rebuild:wa-agent": "tsx src/scripts/rebuild-wa-agent-bank.ts",
     "audit:materials": "tsx src/scripts/audit-material-bank.ts",
+    "ocr:pdf-pages": "tsx src/scripts/ocr-pdf-pages.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

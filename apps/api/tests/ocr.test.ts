@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectOcrColumnSplit, parseTsv, reorderBanded, reorderColumnMajor } from "../src/services/ocr.js";
+import { detectOcrColumnSplit, joinOcrPages, parseTsv, reorderBanded, reorderColumnMajor } from "../src/services/ocr.js";
 
 const header = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
 
@@ -90,3 +90,10 @@ describe("reorderBanded", () => {
   });
 });
 
+describe("joinOcrPages", () => {
+  it("puts each page behind a page marker under a source line", () => {
+    expect(joinOcrPages("data/book.pdf", ["first page", "second page"])).toBe(
+      "[PDF_SOURCE data/book.pdf]\n\n[PDF_PAGE 1]\nfirst page\n\n[PDF_PAGE 2]\nsecond page"
+    );
+  });
+});
