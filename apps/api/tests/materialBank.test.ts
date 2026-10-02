@@ -222,6 +222,25 @@ describe("dedupeNearDuplicates", () => {
     expect(result.conflictCount).toBe(0);
   });
 
+  it("does not call OCR wording differences in the same answer a conflict", () => {
+    const a = materialQuestionFixture({
+      ...base, contentHash: "a",
+      options: opts(["all owners share equal control", "it allows persons with less capital available to still participate in real estate projects", "ownership is divided among the shareholders", "taxation is similar to that of a corporation"]),
+      answerLabels: ["B"], correctAnswers: [1],
+    });
+    const b = materialQuestionFixture({
+      ...base, contentHash: "b",
+      options: opts(["all owners share equal control", "it allows persons with less capital to invest to still participate in real estate projects", "ownership is divided among the shareholders", "taxation is similar to that of a corporation"]),
+      answerLabels: ["B"], correctAnswers: [1],
+    });
+
+    const result = dedupeNearDuplicates([a, b]);
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.conflictCount).toBe(0);
+    expect(result.questions[0].reviewStatus).toBe("ready");
+  });
+
   it("sends copies that disagree on the answer to user review instead of picking one", () => {
     const first = materialQuestionFixture({ ...base, contentHash: "a" });
     const second = materialQuestionFixture({ ...base, contentHash: "b", answerLabels: ["B"], correctAnswers: [1] });

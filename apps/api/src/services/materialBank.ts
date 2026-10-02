@@ -34,16 +34,26 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return shared / (a.size + b.size - shared);
 }
 
+function rawKeyedText(question: MaterialQuestion): string {
+  const index = question.correctAnswers[0];
+  return index === undefined ? "" : question.options[index]?.text ?? "";
+}
+
 function keyedAnswerText(question: MaterialQuestion): string {
   const index = question.correctAnswers[0];
   return index === undefined ? "" : alnum(question.options[index]?.text ?? "");
 }
 
-// One answer is the same as another, or a truncated copy of it.
-function answersCompatible(a: string, b: string): boolean {
+const MIN_ANSWER_WORD_OVERLAP = 0.6;
+
+// One answer is the same as another, a truncated copy of it, or the same words
+// read slightly differently by OCR. Only answers that genuinely differ conflict.
+function answersCompatible(a: string, b: string, textA: string, textB: string): boolean {
   if (!a || !b) return true;
   const [short, long] = a.length <= b.length ? [a, b] : [b, a];
-  return short.length >= 8 ? long.startsWith(short) : short === long;
+  if (short.length >= 8 ? long.startsWith(short) : short === long) return true;
+  const wordsOfText = (text: string) => new Set(text.toLowerCase().match(/[a-z0-9]{2,}/g) || []);
+  return jaccard(wordsOfText(textA), wordsOfText(textB)) >= MIN_ANSWER_WORD_OVERLAP;
 }
 
 function servableRank(question: MaterialQuestion): number {
@@ -90,8 +100,9 @@ export function dedupeNearDuplicates(questions: MaterialQuestion[]) {
   const ordered = clusters.map(({ members: group }) => {
     removedCount += group.length - 1;
     let best = group.reduce(betterCopy);
-    const answers = group.map(keyedAnswerText);
-    const conflicting = answers.some((answer) => !answersCompatible(answer, answers[0]) || !answersCompatible(answer, keyedAnswerText(best)));
+    const answers = group.map((member) => ({ key: keyedAnswerText(member), text: rawKeyedText(member) }));
+    const reference = { key: keyedAnswerText(best), text: rawKeyedText(best) };
+    const conflicting = answers.some((answer) => !answersCompatible(answer.key, reference.key, answer.text, reference.text));
     if (conflicting && isServableMaterialQuestion(best)) {
       conflictCount += 1;
       best = {
