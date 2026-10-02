@@ -158,7 +158,10 @@ export function dedupeNearDuplicates(
   const ordered = clusters.map(({ members: group }) => {
     removedCount += group.length - 1;
     let best = group.reduce((a, b) => betterCopy(a, b, damageOf, auditFailed));
-    const answers = group.map((member) => ({ key: keyedAnswerText(member), text: rawKeyedText(member) }));
+    // A copy the audit already judged broken has been dealt with; its key does not
+    // count against a copy that passed.
+    const considered = group.filter((member) => !auditFailed(member));
+    const answers = (considered.length > 0 ? considered : group).map((member) => ({ key: keyedAnswerText(member), text: rawKeyedText(member) }));
     const reference = { key: keyedAnswerText(best), text: rawKeyedText(best) };
     const conflicting = answers.some((answer) => !answersCompatible(answer.key, reference.key, answer.text, reference.text));
     if (conflicting && isServableMaterialQuestion(best)) {

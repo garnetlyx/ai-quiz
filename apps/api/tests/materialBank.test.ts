@@ -224,6 +224,34 @@ describe("dedupeNearDuplicates", () => {
     expect(result.questions[0].contentHash).toBe("clean");
   });
 
+  it("ignores a copy the audit already judged to have a wrong key when looking for answer conflicts", () => {
+    const rightKey = materialQuestionFixture({ ...base, contentHash: "right", answerLabels: ["A"], correctAnswers: [0] });
+    const wrongKey = materialQuestionFixture({
+      ...base, contentHash: "wrong", answerLabels: ["C"], correctAnswers: [2],
+      question: base.question.replace("preferable", "preferred"),
+    });
+
+    const result = dedupeNearDuplicates([wrongKey, rightKey], () => 0, (question) => question.contentHash === "wrong");
+
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0].contentHash).toBe("right");
+    expect(result.questions[0].reviewStatus).toBe("ready");
+    expect(result.conflictCount).toBe(0);
+  });
+
+  it("still reports a conflict when two copies that both passed the audit disagree", () => {
+    const one = materialQuestionFixture({ ...base, contentHash: "one", answerLabels: ["A"], correctAnswers: [0] });
+    const two = materialQuestionFixture({
+      ...base, contentHash: "two", answerLabels: ["C"], correctAnswers: [2],
+      question: base.question.replace("preferable", "preferred"),
+    });
+
+    const result = dedupeNearDuplicates([one, two], () => 0, () => false);
+
+    expect(result.conflictCount).toBe(1);
+    expect(result.questions[0].reviewStatus).toBe("needs_user_review");
+  });
+
   it("prefers a copy that passed the model audit over one it failed", () => {
     const failedAudit = materialQuestionFixture({ ...base, contentHash: "failed", answerExplanation: "Has an explanation." });
     const passedAudit = materialQuestionFixture({ ...base, contentHash: "passed", answerExplanation: null });
