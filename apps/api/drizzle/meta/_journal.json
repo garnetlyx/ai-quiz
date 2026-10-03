@@ -29,6 +29,13 @@
       "when": 1790921958635,
       "tag": "0003_sync_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790992539833,
+      "tag": "0004_drop_ai_agent",
+      "breakpoints": true
     }
   ]
 }

@@ -60,6 +60,18 @@ AI-powered exam prep web app. Users describe their target exam in plain text, an
    npm run dev:web
    ```
 
+### Tailscale access
+
+To open the app from any device on your tailnet, run the API and web app on this
+machine's Tailscale address:
+
+```bash
+scripts/tailnet.sh start     # or stop | restart | status
+```
+
+The API listens on the tailnet IP only (`HOST`), the web app on port 8081 and is
+built against that API address. Logs are in `$TMPDIR/ai-quiz-tailnet/`.
+
 ### Testing
 ```bash
 npm test

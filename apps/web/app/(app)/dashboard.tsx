@@ -12,42 +12,21 @@ import {
 import { useRouter } from "expo-router";
 import { useAuthStore } from "@/stores/auth";
 import { useTopicStore } from "@/stores/topic";
-import { api } from "@/services/api";
 import type { Topic } from "@ai-quiz/shared";
-
-const AI_AGENTS = [
-  { id: "glm", label: "GLM", description: "Balanced" },
-  { id: "deepseek", label: "DeepSeek", description: "Fast" },
-  { id: "qwen", label: "Qwen", description: "Thorough" },
-] as const;
 
 export default function DashboardScreen() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
-  const setAiAgent = useAuthStore((s) => s.setAiAgent);
   const topics = useTopicStore((s) => s.topics);
   const fetchTopics = useTopicStore((s) => s.fetchTopics);
   const deleteTopic = useTopicStore((s) => s.deleteTopic);
   const isLoading = useTopicStore((s) => s.isLoading);
   const [deletingTopicId, setDeletingTopicId] = useState<string | null>(null);
-  const [showAgentPicker, setShowAgentPicker] = useState(false);
-
-  const currentAgent = AI_AGENTS.find((a) => a.id === (user?.aiAgent || "glm")) || AI_AGENTS[0];
 
   useEffect(() => {
     fetchTopics();
   }, [fetchTopics]);
-
-  const handleSwitchAgent = async (agentId: string) => {
-    try {
-      await api.request("/api/auth/ai-agent", { method: "PUT", body: { agent: agentId } });
-      setAiAgent(agentId);
-      setShowAgentPicker(false);
-    } catch {
-      /* skip */
-    }
-  };
 
   const handleLogout = () => {
     logout();
@@ -144,31 +123,11 @@ export default function DashboardScreen() {
           <Text style={styles.email}>{user?.email}</Text>
         </View>
         <View style={styles.headerActions}>
-          <Pressable style={styles.agentButton} onPress={() => setShowAgentPicker(!showAgentPicker)}>
-            <Text style={styles.agentLabel}>🤖 {currentAgent.label}</Text>
-          </Pressable>
           <Pressable onPress={handleLogout}>
             <Text style={styles.logout}>Sign Out</Text>
           </Pressable>
         </View>
       </View>
-
-      {showAgentPicker && (
-        <View style={styles.agentPicker}>
-          {AI_AGENTS.map((agent) => (
-            <Pressable
-              key={agent.id}
-              style={[styles.agentOption, currentAgent.id === agent.id && styles.agentOptionActive]}
-              onPress={() => handleSwitchAgent(agent.id)}
-            >
-              <Text style={[styles.agentOptionLabel, currentAgent.id === agent.id && styles.agentOptionLabelActive]}>
-                {agent.label}
-              </Text>
-              <Text style={styles.agentOptionDesc}>{agent.description}</Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
 
       <Pressable
         style={styles.newTopicButton}
@@ -202,14 +161,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f5f5f5" },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#eee" },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 12 },
-  agentButton: { backgroundColor: "#f0f4ff", paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, borderColor: "#c7d2fe" },
-  agentLabel: { fontSize: 14, fontWeight: "600", color: "#4338ca" },
-  agentPicker: { backgroundColor: "#fff", padding: 12, borderBottomWidth: 1, borderBottomColor: "#eee", flexDirection: "row", gap: 8, justifyContent: "center" },
-  agentOption: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: "#e5e7eb", backgroundColor: "#f9fafb", alignItems: "center", minWidth: 100 },
-  agentOptionActive: { borderColor: "#4338ca", backgroundColor: "#eef2ff" },
-  agentOptionLabel: { fontSize: 14, fontWeight: "700", color: "#374151" },
-  agentOptionLabelActive: { color: "#4338ca" },
-  agentOptionDesc: { fontSize: 11, color: "#9ca3af", marginTop: 2 },
   greeting: { fontSize: 18, fontWeight: "600" },
   email: { fontSize: 14, color: "#666", marginTop: 2 },
   logout: { color: "#dc2626", fontSize: 14 },

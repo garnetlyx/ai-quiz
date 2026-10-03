@@ -8,11 +8,10 @@ import {
   questions,
   topics,
   topicUpdateSuggestions,
-  users,
 } from "../db/schema.js";
 import { eq, and, desc, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { interpretTopic, detectFormat, generateScope, isValidAgent, type AiAgent } from "../services/ai.js";
+import { interpretTopic, detectFormat, generateScope } from "../services/ai.js";
 import { searchWeb } from "../services/search.js";
 import {
   DEFAULT_MATERIALS,
@@ -103,10 +102,7 @@ export async function topicRoutes(app: FastifyInstance) {
     const { description } = parsed.data;
     const userId = (request.user as { userId: string }).userId;
 
-    const [user] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
-    const agent: AiAgent = user?.aiAgent && isValidAgent(user.aiAgent) ? user.aiAgent : "glm";
-
-    const interpretation = await interpretTopic(description, agent);
+    const interpretation = await interpretTopic(description);
 
     if (interpretation.needsClarification) {
       return reply.send({
@@ -116,12 +112,11 @@ export async function topicRoutes(app: FastifyInstance) {
       });
     }
 
-    const format = await detectFormat(description, agent);
+    const format = await detectFormat(description);
     let scope = defaultScope(description);
     try {
       const generatedScope = await generateScope(
-        interpretation.interpretation?.description ?? description,
-        agent
+        interpretation.interpretation?.description ?? description
       );
       scope = normalizeScope(generatedScope);
       assertScopeIsUsable(scope);
@@ -158,9 +153,6 @@ export async function topicRoutes(app: FastifyInstance) {
 
     const { confirmed, feedback } = parsed.data;
     const userId = (request.user as { userId: string }).userId;
-
-    const [userRow] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
-    const confirmAgent: AiAgent = userRow?.aiAgent && isValidAgent(userRow.aiAgent) ? userRow.aiAgent : "glm";
 
     const [topic] = await db
       .select()
@@ -204,8 +196,7 @@ export async function topicRoutes(app: FastifyInstance) {
         : undefined;
 
     const refinedFormat = await detectFormat(
-      `${topic.description}\n\nUser feedback: ${feedback}${searchContext ? `\n\nAdditional context from web search:\n${searchContext}` : ""}`,
-      confirmAgent
+      `${topic.description}\n\nUser feedback: ${feedback}${searchContext ? `\n\nAdditional context from web search:\n${searchContext}` : ""}`
     );
 
     await db

@@ -128,38 +128,6 @@ interface GeneratedQuestion {
   scopeItemId?: string | null;
 }
 
-export type AiAgent = "glm" | "deepseek" | "qwen";
-
-const AI_AGENT_MODELS: Record<AiAgent, string> = {
-  glm: "glm-5.1",
-  deepseek: "deepseek-v4-flash",
-  qwen: "Qwen3.5-122B-A10B-4bit",
-};
-
-const AI_AGENT_LABELS: Record<AiAgent, string> = {
-  glm: "GLM",
-  deepseek: "DeepSeek",
-  qwen: "Qwen",
-};
-
-export const AI_AGENT_OPTIONS: { id: AiAgent; label: string; description: string }[] = [
-  { id: "glm", label: "GLM", description: "Balanced — good all-rounder" },
-  { id: "deepseek", label: "DeepSeek", description: "Fast — quick responses" },
-  { id: "qwen", label: "Qwen", description: "Thorough — large model, careful reasoning" },
-];
-
-export function resolveModel(agent: AiAgent): string {
-  return AI_AGENT_MODELS[agent] || AI_AGENT_MODELS.glm;
-}
-
-export function isValidAgent(value: string): value is AiAgent {
-  return value in AI_AGENT_MODELS;
-}
-
-export function getAgentLabel(agent: AiAgent): string {
-  return AI_AGENT_LABELS[agent];
-}
-
 export function getModel(): string {
   return process.env.OPENAI_MODEL || "gpt-4o";
 }
@@ -214,12 +182,11 @@ export function validateAiResponse<T>(
 }
 
 export async function interpretTopic(
-  userInput: string,
-  agent: AiAgent = "glm"
+  userInput: string
 ): Promise<TopicInterpretResult> {
   const messages = buildTopicInterpretMessages(userInput);
   const response = await withRetry(() => getClient().chat.completions.create({
-    model: resolveModel(agent),
+    model: getModel(),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.3,
@@ -234,12 +201,11 @@ export async function interpretTopic(
 }
 
 export async function detectFormat(
-  topicDescription: string,
-  agent: AiAgent = "glm"
+  topicDescription: string
 ): Promise<ExamFormatResult> {
   const messages = buildFormatDetectMessages(topicDescription);
   const response = await withRetry(() => getClient().chat.completions.create({
-    model: resolveModel(agent),
+    model: getModel(),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.2,
@@ -250,14 +216,13 @@ export async function detectFormat(
 }
 
 export async function generateScope(
-  topicDescription: string,
-  agent: AiAgent = "glm"
+  topicDescription: string
 ): Promise<{
   chapters: { title: string; items: { title: string; details?: string }[] }[];
 }> {
   const messages = buildScopeGenerateMessages(topicDescription);
   const response = await withRetry(() => getClient().chat.completions.create({
-    model: resolveModel(agent),
+    model: getModel(),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.3,
@@ -276,11 +241,10 @@ export async function generateQuestions(params: {
   instructions?: string;
   scopeContext?: string;
   scopePlan?: { id: string; title: string; count: number }[];
-  agent?: AiAgent;
 }): Promise<GeneratedQuestion[]> {
   const messages = buildQuestionGenerateMessages(params);
   const response = await withRetry(() => getClient().chat.completions.create({
-    model: resolveModel(params.agent || "glm"),
+    model: getModel(),
     messages,
     response_format: { type: "json_object" },
     temperature: 0.7,

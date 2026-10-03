@@ -10,6 +10,7 @@ const envSchema = z.object({
   OPENAI_MODEL: z.string().optional(),
   BRAVE_API_KEY: z.string().optional(),
   PORT: z.coerce.number().default(3001),
+  HOST: z.string().default("0.0.0.0"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -25,7 +26,7 @@ const env = parsed.data;
 
 async function main() {
   const app = await build();
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  await app.listen({ port: env.PORT, host: env.HOST });
 }
 
 main().catch((err) => {

@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { users, questions, quizSessions, topics } from "../db/schema.js";
+import { questions, quizSessions, topics } from "../db/schema.js";
 import { asc, eq, count as drizzleCount } from "drizzle-orm";
 import {
   generateQuizForTopic,
@@ -9,7 +9,6 @@ import {
   getQuizResults,
   flagQuestion,
 } from "../services/quiz.js";
-import { isValidAgent, type AiAgent } from "../services/ai.js";
 import {
   sessionAndQuestionIdParamsSchema,
   sessionIdParamsSchema,
@@ -47,9 +46,6 @@ export async function quizRoutes(app: FastifyInstance) {
 
     const userId = (request.user as { userId: string }).userId;
 
-    const [user] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
-    const agent: AiAgent = user?.aiAgent && isValidAgent(user.aiAgent) ? user.aiAgent : "glm";
-
     try {
       const result = await generateQuizForTopic(
         topicId,
@@ -60,7 +56,6 @@ export async function quizRoutes(app: FastifyInstance) {
           timerDurationSeconds: parsed.data.timerDuration,
           mode: parsed.data.mode,
           subtopicFilter: parsed.data.subtopicFilter,
-          agent,
         }
       );
 
@@ -135,11 +130,8 @@ export async function quizRoutes(app: FastifyInstance) {
 
       const userId = (request.user as { userId: string }).userId;
 
-      const [userRow] = await db.select({ aiAgent: users.aiAgent }).from(users).where(eq(users.id, userId)).limit(1);
-      const flagAgent: AiAgent = userRow?.aiAgent && isValidAgent(userRow.aiAgent) ? userRow.aiAgent : "glm";
-
       try {
-        await flagQuestion(sessionId, questionId, parsed.data.reason, userId, parsed.data.category, flagAgent);
+        await flagQuestion(sessionId, questionId, parsed.data.reason, userId, parsed.data.category);
         return reply.send({ success: true });
       } catch (err) {
         const message =

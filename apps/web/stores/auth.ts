@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api } from "../services/api";
 
 interface AuthState {
-  user: { id: string; email: string; aiAgent?: string } | null;
+  user: { id: string; email: string } | null;
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -10,7 +10,6 @@ interface AuthState {
   register: (email: string, password: string) => Promise<void>;
   logout: () => void;
   hydrate: () => void;
-  setAiAgent: (agent: string) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -20,7 +19,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: false,
 
   hydrate: () => {
-    const user = api.getUser<{ id: string; email: string; aiAgent?: string }>();
+    const user = api.getUser<{ id: string; email: string }>();
     const token =
       typeof window !== "undefined"
         ? localStorage.getItem("auth_token")
@@ -30,20 +29,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  setAiAgent: (agent: string) => {
-    set((state) => {
-      if (!state.user) return state;
-      const updated = { ...state.user, aiAgent: agent };
-      api.setUser(updated);
-      return { user: updated };
-    });
-  },
-
   login: async (email, password) => {
     set({ isLoading: true });
     try {
       const res = await api.request<{
-        user: { id: string; email: string; aiAgent?: string };
+        user: { id: string; email: string };
         token: string;
       }>("/api/auth/login", {
         method: "POST",
@@ -67,7 +57,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ isLoading: true });
     try {
       const res = await api.request<{
-        user: { id: string; email: string; aiAgent?: string };
+        user: { id: string; email: string };
         token: string;
       }>("/api/auth/register", {
         method: "POST",

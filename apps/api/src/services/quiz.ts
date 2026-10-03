@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import { db } from "../db/index.js";
 import { materialQuestions, materialTextChunks, questions, quizSessions, topics } from "../db/schema.js";
 import { eq, and, asc, desc, count, isNull, isNotNull, inArray } from "drizzle-orm";
-import { generateQuestions, getClient, getModel, parseJsonObject, getMessageContent, validateAiResponse, resolveModel, isValidAgent, type AiAgent } from "./ai.js";
+import { generateQuestions, getClient, getModel, parseJsonObject, getMessageContent, validateAiResponse } from "./ai.js";
 import { searchWeb } from "./search.js";
 import { buildFlagVerifyMessages } from "../prompts/flag-verify.js";
 import {
@@ -37,7 +37,7 @@ const flagVerifyResultSchema = z.object({
   })).default([]),
 });
 
-export async function verifyFlaggedQuestion(questionId: string, agent: AiAgent = "glm"): Promise<void> {
+export async function verifyFlaggedQuestion(questionId: string): Promise<void> {
   const [question] = await db
     .select()
     .from(questions)
@@ -58,7 +58,7 @@ export async function verifyFlaggedQuestion(questionId: string, agent: AiAgent =
     });
 
     const response = await getClient().chat.completions.create({
-      model: resolveModel(agent),
+      model: getModel(),
       messages,
       response_format: { type: "json_object" },
       temperature: 0.2,
@@ -249,7 +249,6 @@ export async function generateQuizForTopic(
     timerDurationSeconds?: number;
     mode?: "normal" | "retry" | "subtopic";
     subtopicFilter?: string[];
-    agent?: AiAgent;
   }
 ) {
   const [topic] = await db
@@ -366,7 +365,6 @@ async function retryGenerateAi(
   existingHashes: { contentHash: string }[],
   options: {
     subtopicFilter?: string[];
-    agent?: AiAgent;
   } | undefined,
   materials: { instructions?: string } | undefined,
   scope: TopicScope | undefined,
@@ -418,7 +416,6 @@ async function generateAiQuestions(
   existingHashes: { contentHash: string }[],
   options?: {
     subtopicFilter?: string[];
-    agent?: AiAgent;
   },
   materials?: { instructions?: string },
   scope?: TopicScope,
@@ -439,7 +436,6 @@ async function generateAiQuestions(
       ? [buildScopeContext(normalizedScope, normalizedMaterials), materialContext].filter(Boolean).join("\n\nImported material context:\n")
       : materialContext || undefined,
     scopePlan: scopePlan || undefined,
-    agent: options?.agent,
   });
 
   for (const q of generated) {
@@ -670,8 +666,7 @@ export async function flagQuestion(
   questionId: string,
   reason: string,
   userId: string,
-  category?: string,
-  agent: AiAgent = "glm"
+  category?: string
 ) {
   const [session] = await db
     .select()
@@ -694,7 +689,7 @@ export async function flagQuestion(
     })
     .where(and(eq(questions.id, questionId), eq(questions.sessionId, sessionId)));
 
-  setTimeout(() => verifyFlaggedQuestion(questionId, agent).catch(() => undefined), 0);
+  setTimeout(() => verifyFlaggedQuestion(questionId).catch(() => undefined), 0);
 }
 
 export async function getQuizHistory(
