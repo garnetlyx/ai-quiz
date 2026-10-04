@@ -1,6 +1,7 @@
 use_default_settings: true
 
 server:
+  # Throwaway value for local development only; not a real secret.
   secret_key: "ai-quiz-local-dev"
   limiter: false
   image_proxy: false

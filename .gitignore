@@ -23,9 +23,11 @@ web-build/
 .expo-shared/
 
 # Local agent/tool artifacts
+.claude/
 .opencode/
 .playwright-mcp/
 .sisyphus/
+state/
 
 # Local runtime and test artifacts
 data/

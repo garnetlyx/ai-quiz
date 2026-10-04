@@ -43,6 +43,11 @@ ai-quiz/
 
 The system supports **unlimited question banks** from multiple sources:
 
+> Note: `data/` (source PDFs, OCR output, and exported banks) and `.opencode/`
+> (local skills) are intentionally not committed — they hold copyrighted source
+> material and machine-local tooling. A fresh clone starts without them; only
+> the ingestion scripts that build banks from your own materials are public.
+
 1. **Verified material banks** in `data/<agent>/material-questions.json` — human-curated, extracted from textbooks/PDFs, ready for quiz generation
 2. **AI-generated questions** — the quiz service can derive new questions from existing banks and web search context (Exa primary, SearXNG/Brave fallback), adapting difficulty and format to the user's performance
 3. **Web-enriched questions** — AI can supplement material questions with current information from web search

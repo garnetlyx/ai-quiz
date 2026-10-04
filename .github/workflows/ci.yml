@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        ports:
+          - 5433:5432
+        env:
+          POSTGRES_DB: ai_quiz
+          POSTGRES_USER: ai_quiz
+          POSTGRES_PASSWORD: ai_quiz_dev
+        options: >-
+          --health-cmd "pg_isready -U ai_quiz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://ai_quiz:ai_quiz_dev@localhost:5433/ai_quiz
+      JWT_SECRET: ci-test-secret
+      OPENAI_API_KEY: sk-ci-placeholder
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

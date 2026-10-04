@@ -1,5 +1,7 @@
 # AI Quiz
 
+[![CI](https://github.com/garnetlyx/ai-quiz/actions/workflows/ci.yml/badge.svg)](https://github.com/garnetlyx/ai-quiz/actions/workflows/ci.yml)
+
 AI-powered exam prep web app. Users describe their target exam in plain text, and AI generates realistic practice questions with detailed explanations. Tracks performance, identifies weak subtopics, and enables targeted practice.
 
 ## Features
@@ -81,7 +83,8 @@ API tests run against a separate `<configured database>_test` on the same server
 (created and migrated automatically, emptied at the start of each run), so they
 never touch development data. Web tests cover its pure helpers.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details and
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 
 ### Search
 
@@ -92,4 +95,4 @@ results and `BRAVE_API_KEY` is set, Brave Search is used as a final fallback.
 
 ## License
 
-TBD
+Released under the [MIT License](LICENSE).

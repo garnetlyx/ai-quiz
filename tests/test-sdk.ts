@@ -6,7 +6,7 @@ async function main() {
   console.log("BASE_URL:", process.env.OPENAI_BASE_URL);
 
   try {
-    const r = await nativeFetch("http://mac-studio.local:4000/v1/models", {
+    const r = await nativeFetch(`${process.env.OPENAI_BASE_URL ?? "http://localhost:4000"}/v1/models`, {
       headers: { Authorization: "Bearer " + process.env.OPENAI_API_KEY },
     });
     console.log("Fetch OK:", r.status);

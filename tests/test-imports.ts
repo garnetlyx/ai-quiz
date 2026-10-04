@@ -1,8 +1,9 @@
 import { nativeFetch } from "../apps/api/src/env.js";
 
 async function test(label: string) {
+  const baseUrl = process.env.OPENAI_BASE_URL ?? "http://localhost:4000";
   try {
-    const r = await nativeFetch("http://mac-studio.local:4000/v1/models", {
+    const r = await nativeFetch(`${baseUrl}/v1/models`, {
       headers: { Authorization: "Bearer " + process.env.OPENAI_API_KEY },
       signal: AbortSignal.timeout(5000),
     });

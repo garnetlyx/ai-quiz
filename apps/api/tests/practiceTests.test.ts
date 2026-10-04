@@ -1,5 +1,11 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseAnswerKey, parsePracticeTests, parseQuestions } from "../src/scripts/extract-practice-tests.js";
+
+// data/ is gitignored, so a fresh clone has no practice-test files; the
+// end-to-end parse below only runs where the source data exists.
+const EXAMS_DIR = path.resolve(process.cwd(), "../..", "data/wa-agent/4-exams");
 
 describe("parseQuestions", () => {
   it("drops page-break separator lines instead of appending them to the prompt", () => {
@@ -120,7 +126,7 @@ describe("question boundary recovery", () => {
 });
 
 
-it("recovers all source question numbers without fabricating absent content", async () => {
+it.skipIf(!existsSync(EXAMS_DIR))("recovers all source question numbers without fabricating absent content", async () => {
   const questions = await parsePracticeTests();
   expect(questions).toHaveLength(520);
   expect(questions.find((question) => question.id === "pt-4-national-31")?.options)
