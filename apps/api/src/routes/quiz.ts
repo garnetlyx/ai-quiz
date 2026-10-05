@@ -16,7 +16,7 @@ import {
 } from "./validation.js";
 
 const createQuizSchema = z.object({
-  questionCount: z.number().int().min(1).max(50),
+  questionCount: z.number().int().min(1).max(100),
   timerEnabled: z.boolean().optional(),
   timerDuration: z.number().int().min(1).optional(),
   mode: z.enum(["normal", "retry", "subtopic"]).optional(),
