@@ -707,11 +707,17 @@ export async function getQuizHistory(
   if (!topic) throw new Error("Topic not found");
 
   const offset = (page - 1) * limit;
+  // Abandoned / still-generating sessions are noise in history: only quizzes
+  // the user actually finished belong here.
+  const completedFilter = and(
+    eq(quizSessions.topicId, topicId),
+    isNotNull(quizSessions.completedAt)
+  );
 
   const sessions = await db
     .select()
     .from(quizSessions)
-    .where(eq(quizSessions.topicId, topicId))
+    .where(completedFilter)
     .orderBy(desc(quizSessions.completedAt))
     .limit(limit)
     .offset(offset);
@@ -719,7 +725,7 @@ export async function getQuizHistory(
   const [totalResult] = await db
     .select({ count: count() })
     .from(quizSessions)
-    .where(eq(quizSessions.topicId, topicId));
+    .where(completedFilter);
 
   return {
     data: sessions.map((s) => ({
